@@ -17,163 +17,684 @@
 package kayak
 
 import (
+	"context"
+	"encoding/binary"
 	"fmt"
-	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
 
+	kl "github.com/CovenantSQL/CovenantSQL/kayak/log"
+	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
 	"github.com/CovenantSQL/CovenantSQL/proto"
+	"github.com/CovenantSQL/CovenantSQL/rpc"
+	"github.com/CovenantSQL/CovenantSQL/utils/log"
+	"github.com/pkg/errors"
 )
 
-const (
-	// FileStorePath is the default log store filename
-	FileStorePath = "kayak.db"
+var (
+	ErrNotLeader      = errors.New("not leader")
+	ErrNotFollower    = errors.New("not follower")
+	ErrPrepareTimeout = errors.New("prepare timeout")
+	ErrPrepareFailed  = errors.New("prepare failed")
+	ErrInvalidLog     = errors.New("invalid log")
+	ErrNotInPeer      = errors.New("node not in peer")
 )
 
-// Runtime defines common init/shutdown logic for different consensus protocol runner.
-type Runtime struct {
-	config       *RuntimeConfig
-	runnerConfig Config
-	peers        *Peers
-	isLeader     bool
-	logStore     *BoltStore
+// RuntimeConfig defines the runtime config of kayak.
+type RuntimeConfig struct {
+	Storage          Storage
+	PrepareThreshold int
+	CommitThreshold  int
+	PrepareTimeout   time.Duration
+	CommitTimeout    time.Duration
+	Peers            *proto.Peers
+	Pool             kl.Pool
+	NodeID           proto.NodeID
+	ServiceName      string
+	MethodName       string
 }
 
-// NewRuntime creates new runtime.
-func NewRuntime(config Config, peers *Peers) (*Runtime, error) {
-	if config == nil || peers == nil {
-		return nil, ErrInvalidConfig
+// Storage defines the main underlying fsm of kayak.
+type Storage interface {
+	Convert([]byte) (interface{}, error)
+	Check(interface{}) error
+	Commit(interface{}) (interface{}, error)
+}
+
+// Runtime defines the main kayak Runtime.
+type Runtime struct {
+	/// indexes
+	// index for next log.
+	// TODO():
+	nextIndex uint64
+	// TODO():
+	// index for next committed log.
+	nextCommitted uint64
+
+	/// underlying Storage
+	st Storage
+
+	/// rpc
+	sv *muxService
+
+	/// Runtime entities
+	// node
+	nodeID           proto.NodeID
+	dbID             proto.DatabaseID
+	logPool          kl.Pool
+	peers            *proto.Peers
+	role             proto.ServerRole
+	followers        []proto.NodeID
+	peerLock         sync.RWMutex
+	callerMap        sync.Map // map[proto.NodeID]*rpc.PersistentCaller
+	serviceName      string
+	rpcMethod        string // serviceName ".Apply"
+	prepareThreshold int
+	commitThreshold  int
+	prepareTimeout   time.Duration
+	commitTimeout    time.Duration
+	pendingRPCLock   sync.Mutex
+	pendingRPCs      []*rpcTracker
+
+	// wait group for sub-routines.
+	wg sync.WaitGroup
+
+	/// Runtime channels
+	// channels for request coordination.
+	commitCh chan *commitReq
+	stopCh   chan struct{}
+	started  uint32
+
+	/// time oracles
+	// time offset
+	timeMux sync.Mutex
+	offset  time.Duration
+}
+
+type RPCRequest struct {
+	DB  proto.DatabaseID
+	Log *kt.Log
+}
+
+type commitReq struct {
+	ctx    context.Context
+	data   interface{}
+	index  uint64
+	log    *kt.Log
+	result chan *commitResult
+}
+
+type commitResult struct {
+	result interface{}
+	err    error
+	rpc    *rpcTracker
+}
+
+type rpcTracker struct {
+	r        *Runtime
+	caller   []*rpc.PersistentCaller
+	nodes    []proto.NodeID
+	method   string
+	req      interface{}
+	minCount int
+	doneCh   chan struct{}
+
+	wg       sync.WaitGroup
+	errLock  sync.RWMutex
+	errors   map[proto.NodeID]error
+	complete uint32
+	sent     uint32
+	closed   uint32
+}
+
+func newTracker(r *Runtime, req interface{}, minCount int) (t *rpcTracker) {
+	// copy nodes
+	nodes := append([]proto.NodeID(nil), r.followers...)
+
+	if minCount > len(nodes) {
+		minCount = len(nodes)
+	}
+	if minCount < 0 {
+		minCount = 0
 	}
 
-	// config authentication check
-	if !peers.Verify() {
-		return nil, ErrInvalidConfig
+	t = &rpcTracker{
+		r:        r,
+		nodes:    nodes,
+		method:   r.rpcMethod,
+		req:      req,
+		minCount: minCount,
+		errors:   make(map[proto.NodeID]error, len(nodes)),
+		doneCh:   make(chan struct{}),
 	}
 
-	// peers config verification
-	serverInPeers := false
-	runtime := &Runtime{
-		config:       config.GetRuntimeConfig(),
-		peers:        peers,
-		runnerConfig: config,
+	return
+}
+
+func (t *rpcTracker) send() {
+	if !atomic.CompareAndSwapUint32(&t.sent, 0, 1) {
+		return
 	}
 
-	for _, s := range peers.Servers {
-		if s.ID == runtime.config.LocalID {
-			serverInPeers = true
+	for i := range t.nodes {
+		t.wg.Add(1)
+		go t.callSingle(i)
+	}
 
-			if s.Role == proto.Leader {
-				runtime.isLeader = true
+	if t.minCount == 0 {
+		t.done()
+	}
+}
+
+func (t *rpcTracker) callSingle(idx int) {
+	err := t.r.getCaller(t.nodes[idx]).Call(t.method, t.req, nil)
+	t.errLock.Lock()
+	t.errors[t.nodes[idx]] = err
+	t.errLock.Unlock()
+	if atomic.AddUint32(&t.complete, 1) >= uint32(t.minCount) {
+		t.done()
+	}
+}
+
+func (t *rpcTracker) done() {
+	select {
+	case <-t.doneCh:
+	default:
+		close(t.doneCh)
+	}
+}
+
+func (t *rpcTracker) get(ctx context.Context) (errors map[proto.NodeID]error, meets bool, finished bool) {
+	for {
+		select {
+		case <-t.doneCh:
+			meets = true
+		default:
+		}
+
+		select {
+		case <-ctx.Done():
+		case <-t.doneCh:
+			meets = true
+		}
+
+		break
+	}
+
+	t.errLock.RLock()
+	defer t.errLock.RUnlock()
+
+	errors = make(map[proto.NodeID]error)
+
+	for s, e := range t.errors {
+		errors[s] = e
+	}
+
+	if !meets && len(errors) >= t.minCount {
+		meets = true
+	}
+
+	if len(errors) == len(t.nodes) {
+		finished = true
+	}
+
+	return
+}
+
+func (t *rpcTracker) close() {
+	if !atomic.CompareAndSwapUint32(&t.closed, 0, 1) {
+		return
+	}
+
+	t.wg.Wait()
+}
+
+// NewRuntime creates new kayak Runtime.
+func NewRuntime(cfg *RuntimeConfig) (rt *Runtime, err error) {
+	peers := cfg.Peers
+	followers := make([]proto.NodeID, 0, len(peers.Servers))
+	exists := false
+	var role proto.ServerRole
+
+	for _, v := range peers.Servers {
+		if !v.IsEqual(&peers.Leader) {
+			followers = append(followers, v)
+		}
+
+		if v.IsEqual(&cfg.NodeID) {
+			exists = true
+			if v.IsEqual(&peers.Leader) {
+				role = proto.Leader
+			} else {
+				role = proto.Follower
 			}
 		}
 	}
 
-	if !serverInPeers {
-		return nil, ErrInvalidConfig
-	}
-
-	return runtime, nil
-}
-
-// Init defines the common init logic.
-func (r *Runtime) Init() (err error) {
-	// init log store
-	var logStore *BoltStore
-
-	if logStore, err = NewBoltStore(filepath.Join(r.config.RootDir, FileStorePath)); err != nil {
-		return fmt.Errorf("new bolt store: %s", err.Error())
-	}
-
-	// call transport init
-	if err = r.config.Transport.Init(); err != nil {
+	if !exists {
+		err = ErrNotInPeer
 		return
 	}
 
-	// call runner init
-	if err = r.config.Runner.Init(r.runnerConfig, r.peers, logStore, logStore, r.config.Transport); err != nil {
-		logStore.Close()
-		return fmt.Errorf("%s runner init: %s", r.config.LocalID, err.Error())
+	rt = &Runtime{
+		st:               cfg.Storage,
+		logPool:          cfg.Pool,
+		peers:            cfg.Peers,
+		nodeID:           cfg.NodeID,
+		followers:        followers,
+		role:             role,
+		serviceName:      cfg.ServiceName,
+		rpcMethod:        fmt.Sprintf("%v.%v", cfg.ServiceName, cfg.MethodName),
+		prepareThreshold: cfg.PrepareThreshold,
+		prepareTimeout:   cfg.PrepareTimeout,
+		commitThreshold:  cfg.CommitThreshold,
+		commitTimeout:    cfg.CommitTimeout,
+		commitCh:         make(chan *commitReq),
+		stopCh:           make(chan struct{}),
 	}
-	r.logStore = logStore
-
-	return nil
+	return
 }
 
-// Shutdown defines common shutdown logic.
+func (r *Runtime) Start() {
+	if !atomic.CompareAndSwapUint32(&r.started, 0, 1) {
+		return
+	}
+	r.goFunc(r.commitCycle)
+}
+
+// Shutdown waits for the Runtime to stop.
 func (r *Runtime) Shutdown() (err error) {
-	if err = r.config.Runner.Shutdown(true); err != nil {
-		return fmt.Errorf("%s runner shutdown: %s", r.config.LocalID, err.Error())
-	}
-
-	if err = r.config.Transport.Shutdown(); err != nil {
+	if !atomic.CompareAndSwapUint32(&r.started, 1, 2) {
 		return
 	}
 
-	if r.logStore != nil {
-		if err = r.logStore.Close(); err != nil {
-			return fmt.Errorf("shutdown bolt store: %s", err.Error())
-		}
-
-		r.logStore = nil
+	select {
+	case <-r.stopCh:
+	default:
+		close(r.stopCh)
 	}
+	r.wg.Wait()
 
-	return nil
+	return
 }
 
-// Apply defines common process logic.
-func (r *Runtime) Apply(data []byte) (result interface{}, offset uint64, err error) {
-	// validate if myself is leader
-	if !r.isLeader {
-		return nil, 0, ErrNotLeader
+// updateTime updates the current coordinated time.
+func (r *Runtime) updateTime(now time.Time) {
+	r.timeMux.Lock()
+	defer r.timeMux.Unlock()
+	r.offset = time.Until(now)
+}
+
+// now returns the current coordinated time.
+func (r *Runtime) now() time.Time {
+	r.timeMux.Lock()
+	defer r.timeMux.Unlock()
+	return time.Now().Add(r.offset)
+}
+
+/// Leader logic
+func (r *Runtime) newLog(logType kt.LogType, data []byte) (l *kt.Log, err error) {
+	// allocate index
+	i := atomic.AddUint64(&r.nextIndex, 1) - 1
+	l = &kt.Log{
+		LogHeader: kt.LogHeader{
+			Index:    i,
+			Type:     logType,
+			Producer: r.nodeID,
+		},
+		Data: data,
 	}
 
-	result, offset, err = r.config.Runner.Apply(data)
-	if err != nil {
-		return nil, 0, err
+	// error write will be a fatal error, cause to node to fail fast
+	err = r.logPool.Write(l)
+
+	return
+}
+
+func (r *Runtime) apply(ctx context.Context, data []byte) (result interface{}, logIndex uint64, err error) {
+	r.peerLock.RLock()
+	defer r.peerLock.RUnlock()
+
+	if r.role != proto.Leader {
+		// not leader
+		err = ErrNotLeader
+		return
+	}
+
+	// create prepare request
+	var prepareLog *kt.Log
+	if prepareLog, err = r.leaderLogPrepare(data); err != nil {
+		// serve error, leader could not write logs, change leader in block producer
+		// TODO(): CHANGE LEADER
+		log.Fatal("FATAL")
+		return
+	}
+
+	// send prepare to all nodes
+	prepareTracker := r.rpc(prepareLog, r.prepareThreshold-1)
+	prepareCtx, prepareCtxCancelFunc := context.WithTimeout(ctx, r.prepareTimeout)
+	defer prepareCtxCancelFunc()
+	prepareErrors, prepareDone, _ := prepareTracker.get(prepareCtx)
+	if !prepareDone {
+		// timeout, rollback
+		err = ErrPrepareTimeout
+		goto ROLLBACK
+	}
+
+	// collect errors
+	if err = r.errorSummary(prepareErrors); err != nil {
+		goto ROLLBACK
+	}
+
+	select {
+	case cResult := <-r.commitResult(ctx, nil, prepareLog):
+		if cResult != nil {
+			logIndex = prepareLog.Index
+			result = cResult.result
+			err = cResult.err
+
+			// wait until context deadline or commit done
+			if cResult.rpc != nil {
+				cResult.rpc.get(ctx)
+			}
+		} else {
+			log.Warningf("WEIRED")
+			select {
+			case <-ctx.Done():
+				err = ctx.Err()
+				goto ROLLBACK
+			default:
+			}
+		}
+	case <-ctx.Done():
+		// pipeline commit timeout
+		logIndex = prepareLog.Index
+		err = ctx.Err()
+		goto ROLLBACK
+	}
+
+	return
+
+ROLLBACK:
+	// rollback local
+	var rollbackLog *kt.Log
+	if rollbackLog, err = r.leaderLogRollback(prepareLog.Index); err != nil {
+		// serve error, construct rollback log failed, internal error
+		// TODO(): CHANGE LEADER
+		log.Fatal("FATAL")
+		return
+	}
+
+	// async send rollback to all nodes
+	r.rpc(rollbackLog, 0)
+
+	return
+}
+
+func (r *Runtime) errorSummary(errs map[proto.NodeID]error) error {
+	failNodes := make([]proto.NodeID, 0, len(errs))
+
+	for s, err := range errs {
+		if err != nil {
+			failNodes = append(failNodes, s)
+		}
+	}
+
+	if len(failNodes) == 0 {
+		return nil
+	}
+
+	return errors.Wrapf(ErrPrepareFailed, "fail on nodes: %v", failNodes)
+}
+
+func (r *Runtime) commitResult(ctx context.Context, commitLog *kt.Log, prepareLog *kt.Log) (res chan *commitResult) {
+	// decode log and send to commit channel to process
+	res = make(chan *commitResult, 1)
+
+	var d interface{}
+	var err error
+	if d, err = r.st.Convert(prepareLog.Data); err != nil {
+		res <- &commitResult{
+			err: err,
+		}
+		return
+	}
+
+	req := &commitReq{
+		ctx:    ctx,
+		data:   d,
+		index:  prepareLog.Index,
+		result: res,
+		log:    commitLog,
+	}
+
+	select {
+	case <-ctx.Done():
+	case r.commitCh <- req:
 	}
 
 	return
 }
 
-// GetLog fetches runtime log produced by runner.
-func (r *Runtime) GetLog(offset uint64) (data []byte, err error) {
-	var l Log
-	if err = r.logStore.GetLog(offset, &l); err != nil {
+func (r *Runtime) commitCycle() {
+	for {
+		var cReq *commitReq
+
+		select {
+		case <-r.stopCh:
+			return
+		case cReq = <-r.commitCh:
+		}
+
+		if cReq == nil {
+			// next
+			continue
+		}
+
+		r.doCommit(cReq)
+	}
+}
+
+func (r *Runtime) doCommit(req *commitReq) {
+	r.peerLock.RLock()
+	defer r.peerLock.RUnlock()
+
+	resp := &commitResult{}
+
+	if r.role == proto.Leader {
+		resp.rpc, resp.result, resp.err = r.leaderDoCommit(req)
+	} else {
+		resp.err = r.followerDoCommit(req)
+	}
+
+	req.result <- resp
+}
+
+func (r *Runtime) leaderDoCommit(req *commitReq) (tracker *rpcTracker, result interface{}, err error) {
+	// assert log is empty
+	if req.log != nil {
+		// fatal
+		log.Fatal("FATAL")
 		return
 	}
 
-	data = l.Data
+	// create leader log
+	var l *kt.Log
+
+	if l, err = r.newLog(kt.LogCommit, r.uint64ToBytes(req.index)); err != nil {
+		// serve error, leader could not write log
+		// TODO(): CHANGE LEADER
+		log.Fatal("FATAL")
+		return
+	}
+
+	result, err = r.st.Commit(req.data)
+
+	// send commit
+	tracker = r.rpc(l, r.commitThreshold-1)
 
 	return
 }
 
-// UpdatePeers defines common peers update logic.
-func (r *Runtime) UpdatePeers(peers *Peers) error {
-	// Verify peers
-	if !peers.Verify() {
-		return ErrInvalidConfig
+func (r *Runtime) followerDoCommit(req *commitReq) (err error) {
+	if req.log == nil {
+		log.Fatal("FATAL")
+		return
 	}
 
-	// Check if myself is still in peers
-	inPeers := false
-	isLeader := false
-
-	for _, s := range peers.Servers {
-		if s.ID == r.config.LocalID {
-			inPeers = true
-			isLeader = s.Role == proto.Leader
-			break
-		}
+	// write log first
+	if err = r.logPool.Write(req.log); err != nil {
+		// TODO(): suicide node
+		log.Fatal("FATAL")
+		return
 	}
 
-	if !inPeers {
-		// shutdown
-		return r.Shutdown()
+	// do commit
+	_, err = r.st.Commit(req.data)
+
+	return
+}
+
+func (r *Runtime) leaderLogPrepare(data []byte) (*kt.Log, error) {
+	// write log
+	return r.newLog(kt.LogPrepare, data)
+}
+
+func (r *Runtime) leaderLogRollback(i uint64) (*kt.Log, error) {
+	// write log
+	return r.newLog(kt.LogRollback, r.uint64ToBytes(i))
+}
+
+/// Follower logic
+func (r *Runtime) applyLog(l *kt.Log) (err error) {
+	r.peerLock.RLock()
+	defer r.peerLock.RUnlock()
+
+	if r.role == proto.Leader {
+		// not follower
+		err = ErrNotFollower
+		return
 	}
 
-	if err := r.config.Runner.UpdatePeers(peers); err != nil {
-		return fmt.Errorf("update peers to %s: %s", peers, err.Error())
+	// verify log structure
+	switch l.Type {
+	case kt.LogPrepare:
+		return r.followerPrepare(l)
+	case kt.LogRollback:
+		return r.followerRollback(l)
+	case kt.LogCommit:
+		return r.followerCommit(l)
+	case kt.LogBarrier:
+		// TODO():
+		fallthrough
+	case kt.LogNoop:
+		// do nothing
+		return r.followerNoop(l)
 	}
 
-	r.isLeader = isLeader
+	return
+}
 
-	return nil
+func (r *Runtime) followerNoop(l *kt.Log) (err error) {
+	return r.logPool.Write(l)
+}
+
+func (r *Runtime) followerPrepare(l *kt.Log) (err error) {
+	// verify
+	var d interface{}
+	if d, err = r.st.Convert(l.Data); err != nil {
+		return
+	}
+
+	if err = r.st.Check(d); err != nil {
+		return
+	}
+
+	// write log
+	err = r.logPool.Write(l)
+
+	return
+}
+
+func (r *Runtime) followerRollback(l *kt.Log) (err error) {
+	if _, err = r.getPrepareLog(l); err == kl.ErrTruncated {
+		err = nil
+	} else if err != nil {
+		return
+	}
+
+	// write log
+	err = r.logPool.Write(l)
+
+	return
+}
+
+func (r *Runtime) followerCommit(l *kt.Log) (err error) {
+	var prepareLog *kt.Log
+	if prepareLog, err = r.getPrepareLog(l); err != nil {
+		return
+	}
+
+	cResult := <-r.commitResult(context.Background(), l, prepareLog)
+	if cResult != nil {
+		err = cResult.err
+	}
+
+	return
+}
+
+func (r *Runtime) getPrepareLog(l *kt.Log) (pl *kt.Log, err error) {
+	var prepareIndex uint64
+	if prepareIndex, err = r.bytesToUint64(l.Data); err != nil {
+		return
+	}
+
+	pl, err = r.logPool.Get(prepareIndex)
+
+	return
+}
+
+// common logic
+func (r *Runtime) rpc(l *kt.Log, minCount int) (tracker *rpcTracker) {
+	req := &RPCRequest{
+		DB:  r.dbID,
+		Log: l,
+	}
+
+	tracker = newTracker(r, req, minCount)
+	tracker.send()
+
+	// TODO(): pending rpc
+	r.pendingRPCLock.Lock()
+	defer r.pendingRPCLock.Unlock()
+	r.pendingRPCs = append(r.pendingRPCs, tracker)
+
+	return
+}
+
+func (r *Runtime) getCaller(id proto.NodeID) *rpc.PersistentCaller {
+	rawCaller, _ := r.callerMap.LoadOrStore(id, rpc.NewPersistentCaller(id))
+	return rawCaller.(*rpc.PersistentCaller)
+}
+
+func (r *Runtime) goFunc(f func()) {
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		f()
+	}()
+}
+
+func (r *Runtime) uint64ToBytes(i uint64) (res []byte) {
+	res = make([]byte, 8)
+	binary.BigEndian.PutUint64(res, i)
+	return
+}
+
+func (r *Runtime) bytesToUint64(b []byte) (uint64, error) {
+	if len(b) < 8 {
+		return 0, ErrInvalidLog
+	}
+	return binary.BigEndian.Uint64(b), nil
 }
