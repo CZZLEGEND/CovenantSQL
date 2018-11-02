@@ -83,6 +83,7 @@ type Runtime struct {
 
 	//// Parameters
 	// prepare threshold defines the minimum node count requirement for prepare operation.
+	// ADVISE(): using value * len(nodes)
 	prepareThreshold int
 	// commit threshold defines the minimum node count requirement for commit operation.
 	commitThreshold int
@@ -454,6 +455,7 @@ func (r *Runtime) commitResult(ctx context.Context, commitLog *kt.Log, prepareLo
 }
 
 func (r *Runtime) commitCycle() {
+	// TODO(): panic recovery
 	for {
 		var cReq *commitReq
 
@@ -495,6 +497,7 @@ func (r *Runtime) leaderDoCommit(req *commitReq) (tracker *rpcTracker, result in
 	var l *kt.Log
 
 	if l, err = r.newLog(kt.LogCommit, r.uint64ToBytes(req.index)); err != nil {
+		// TODO(): record last commit
 		// serve error, leader could not write log
 		return
 	}
@@ -504,6 +507,10 @@ func (r *Runtime) leaderDoCommit(req *commitReq) (tracker *rpcTracker, result in
 
 	// send commit
 	tracker = r.rpc(l, r.commitThreshold-1)
+
+	// TODO(): text log for rpc errors
+
+	// TODO(): mark uncommitted nodes and remove from peers
 
 	return
 }
@@ -584,6 +591,8 @@ func (r *Runtime) rpc(l *kt.Log, minCount int) (tracker *rpcTracker) {
 	tracker.send()
 
 	// TODO(): track this rpc
+
+	// TODO(): log remote errors
 
 	return
 }
