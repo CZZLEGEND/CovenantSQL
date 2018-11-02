@@ -36,6 +36,7 @@ var (
 	baseIndexKey = []byte{'B', 'I'}
 )
 
+// LevelDBPool defines a pool using leveldb as storage.
 type LevelDBPool struct {
 	db     *leveldb.DB
 	closed uint32
@@ -48,6 +49,7 @@ type LevelDBPool struct {
 	pending     []uint64
 }
 
+// NewLevelDBPool returns new leveldb pool instance.
 func NewLevelDBPool(filename string) (p *LevelDBPool, err error) {
 	p = &LevelDBPool{}
 	if p.db, err = leveldb.OpenFile(filename, nil); err != nil {
@@ -72,6 +74,7 @@ func NewLevelDBPool(filename string) (p *LevelDBPool, err error) {
 	return
 }
 
+// Write implements Pool.Write.
 func (p *LevelDBPool) Write(l *kt.Log) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -137,6 +140,7 @@ func (p *LevelDBPool) Write(l *kt.Log) (err error) {
 	return
 }
 
+// Read implements Pool.Read.
 func (p *LevelDBPool) Read() (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -166,6 +170,7 @@ func (p *LevelDBPool) Read() (l *kt.Log, err error) {
 	return
 }
 
+// Seek implements Pool.Seek.
 func (p *LevelDBPool) Seek(offset uint64) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -176,6 +181,7 @@ func (p *LevelDBPool) Seek(offset uint64) (err error) {
 	return
 }
 
+// Truncate implements Pool.Truncate.
 func (p *LevelDBPool) Truncate() (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -208,6 +214,7 @@ func (p *LevelDBPool) Truncate() (err error) {
 	return
 }
 
+// Get implements Pool.Get.
 func (p *LevelDBPool) Get(i uint64) (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -240,6 +247,7 @@ func (p *LevelDBPool) Get(i uint64) (l *kt.Log, err error) {
 	return
 }
 
+// Close implements Pool.Close.
 func (p *LevelDBPool) Close() {
 	if !atomic.CompareAndSwapUint32(&p.closed, 0, 1) {
 		return

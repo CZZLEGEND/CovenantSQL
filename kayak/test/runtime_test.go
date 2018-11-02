@@ -22,7 +22,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/CovenantSQL/CovenantSQL/utils/log"
 	"math/rand"
 	"net"
 	"net/rpc"
@@ -33,9 +32,11 @@ import (
 
 	"github.com/CovenantSQL/CovenantSQL/kayak"
 	kl "github.com/CovenantSQL/CovenantSQL/kayak/log"
+	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
 	"github.com/CovenantSQL/CovenantSQL/proto"
 	"github.com/CovenantSQL/CovenantSQL/sqlchain/storage"
 	"github.com/CovenantSQL/CovenantSQL/utils"
+	"github.com/CovenantSQL/CovenantSQL/utils/log"
 	"github.com/jordwest/mock-conn"
 	. "github.com/smartystreets/goconvey/convey"
 )
@@ -108,12 +109,14 @@ func (s *sqliteStorage) Commit(data interface{}) (result interface{}, err error)
 		return
 	}
 
+	tm := time.Now()
 	var lastInsertID, rowsAffected int64
 	lastInsertID, rowsAffected, err = s.st.Exec(context.Background(), d.Queries)
 	result = &queryResult{
 		LastInsertID: lastInsertID,
 		RowsAffected: rowsAffected,
 	}
+	log.WithField("c", time.Now().Sub(tm).String()).Info("db commit")
 
 	return
 }
@@ -163,7 +166,7 @@ func newFakeService(rt *kayak.Runtime) (fs *fakeService) {
 	return
 }
 
-func (s *fakeService) Call(req *kayak.RPCRequest, resp *interface{}) (err error) {
+func (s *fakeService) Call(req *kt.RPCRequest, resp *interface{}) (err error) {
 	return s.rt.FollowerApply(req.Log)
 }
 
@@ -228,8 +231,8 @@ func BenchmarkNewRuntime(b *testing.B) {
 		}
 
 		pool1 := kl.NewMemPool()
-		cfg1 := &kayak.RuntimeConfig{
-			Storage:          db1,
+		cfg1 := &kt.RuntimeConfig{
+			Handler:          db1,
 			PrepareThreshold: 2,
 			CommitThreshold:  2,
 			PrepareTimeout:   time.Second,
@@ -244,8 +247,8 @@ func BenchmarkNewRuntime(b *testing.B) {
 		So(err, ShouldBeNil)
 
 		pool2 := kl.NewMemPool()
-		cfg2 := &kayak.RuntimeConfig{
-			Storage:          db2,
+		cfg2 := &kt.RuntimeConfig{
+			Handler:          db2,
 			PrepareThreshold: 2,
 			CommitThreshold:  2,
 			PrepareTimeout:   time.Second,

@@ -14,18 +14,9 @@
  * limitations under the License.
  */
 
-package log
+package kayak
 
-import (
-	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
-)
-
-// Pool defines the log storage interface.
-type Pool interface {
-	Write(*kt.Log) error
-	Read() (*kt.Log, error)
-	Seek(offset uint64) error
-	Truncate() error
-	Get(index uint64) (*kt.Log, error)
-	Close()
+// Caller defines the rpc caller, supports mocks for the default rpc.PersistCaller.
+type Caller interface {
+	Call(method string, req interface{}, resp interface{}) error
 }

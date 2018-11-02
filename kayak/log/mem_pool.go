@@ -25,6 +25,7 @@ import (
 	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
 )
 
+// MemPool defines pool using memory as storage.
 type MemPool struct {
 	sync.RWMutex
 	logs     []*kt.Log
@@ -38,6 +39,7 @@ type MemPool struct {
 	closed       uint32
 }
 
+// NewMemPool returns new memory pool instance.
 func NewMemPool() (p *MemPool) {
 	p = &MemPool{
 		revIndex: make(map[uint64]int),
@@ -46,6 +48,7 @@ func NewMemPool() (p *MemPool) {
 	return
 }
 
+// Write implements Pool.Write.
 func (p *MemPool) Write(l *kt.Log) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -100,6 +103,7 @@ func (p *MemPool) Write(l *kt.Log) (err error) {
 	return
 }
 
+// Read implements Pool.Read.
 func (p *MemPool) Read() (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -121,6 +125,7 @@ func (p *MemPool) Read() (l *kt.Log, err error) {
 	return
 }
 
+// Seek implements Pool.Seek.
 func (p *MemPool) Seek(offset uint64) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -131,6 +136,7 @@ func (p *MemPool) Seek(offset uint64) (err error) {
 	return
 }
 
+// Truncate implements Pool.Truncate.
 func (p *MemPool) Truncate() (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -162,6 +168,7 @@ func (p *MemPool) Truncate() (err error) {
 	return
 }
 
+// Get implements Pool.Get.
 func (p *MemPool) Get(index uint64) (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -188,6 +195,7 @@ func (p *MemPool) Get(index uint64) (l *kt.Log, err error) {
 	return
 }
 
+// Close implements Pool.Close.
 func (p *MemPool) Close() {
 	if !atomic.CompareAndSwapUint32(&p.closed, 0, 1) {
 		return

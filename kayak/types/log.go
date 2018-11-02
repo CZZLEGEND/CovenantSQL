@@ -20,21 +20,19 @@ import (
 	"github.com/CovenantSQL/CovenantSQL/proto"
 )
 
-//go:generate hsp
-
 // LogType defines the log type.
 type LogType uint16
 
 const (
 	// LogPrepare defines the prepare phase of a commit.
 	LogPrepare LogType = iota
-	// LogPrepare defines the rollback phase of a commit.
+	// LogRollback defines the rollback phase of a commit.
 	LogRollback
 	// LogCommit defines the commit phase of a commit.
 	LogCommit
 	// LogBarrier defines barrier log, all open windows should be waiting this operations to complete.
 	LogBarrier
-	// LogNop defines noop log.
+	// LogNoop defines noop log.
 	LogNoop
 )
 

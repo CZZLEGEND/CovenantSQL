@@ -29,12 +29,14 @@ import (
 )
 
 const (
-	// 4 megs
+	// LogObjectMagic defines the magic number for log object in file.
 	LogObjectMagic = 0xfb709394
-	MinFileSize    = 4 * 1024 * 1024
+	// MinFileSize defines the minimum log file size.
+	MinFileSize = 4 * 1024 * 1024
 )
 
 var (
+	// ErrOpenFailed represents error opening log pool file.
 	ErrOpenFailed = errors.New("open pool file failed")
 )
 
@@ -43,6 +45,7 @@ type fileIndex struct {
 	LogIndex     map[uint64]int64
 }
 
+// FilePool defines pool using plain file as storage.
 type FilePool struct {
 	sync.RWMutex
 	closed uint32
@@ -51,6 +54,7 @@ type FilePool struct {
 	fi fileIndex
 }
 
+// NewFilePool return new file pool for log.
 func NewFilePool(filename string) (p *FilePool, err error) {
 	p = &FilePool{}
 
@@ -122,6 +126,7 @@ func NewFilePool(filename string) (p *FilePool, err error) {
 	return
 }
 
+// Write implements Pool.Write.
 func (p *FilePool) Write(l *kt.Log) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -132,6 +137,7 @@ func (p *FilePool) Write(l *kt.Log) (err error) {
 	return
 }
 
+// Read implements Pool.Read.
 func (p *FilePool) Read() (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -142,6 +148,7 @@ func (p *FilePool) Read() (l *kt.Log, err error) {
 	return
 }
 
+// Seek implements Pool.Seek.
 func (p *FilePool) Seek(offset uint64) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -152,6 +159,7 @@ func (p *FilePool) Seek(offset uint64) (err error) {
 	return
 }
 
+// Truncate implements Pool.Truncate.
 func (p *FilePool) Truncate() (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -162,6 +170,7 @@ func (p *FilePool) Truncate() (err error) {
 	return
 }
 
+// Get implements Pool.Get.
 func (p *FilePool) Get(index uint64) (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
@@ -172,6 +181,7 @@ func (p *FilePool) Get(index uint64) (l *kt.Log, err error) {
 	return
 }
 
+// Close implements Pooo.Close.
 func (p *FilePool) Close() {
 	if atomic.CompareAndSwapUint32(&p.closed, 0, 1) {
 		return
