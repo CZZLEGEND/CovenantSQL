@@ -322,7 +322,7 @@ func (s *Storage) Query(ctx context.Context, queries []Query) (columns []string,
 }
 
 // Exec implements write query feature.
-func (s *Storage) Exec(ctx context.Context, queries []Query) (rowsAffected int64, err error) {
+func (s *Storage) Exec(ctx context.Context, queries []Query) (lastInsertID int64, rowsAffected int64, err error) {
 	if len(queries) == 0 {
 		return
 	}
@@ -353,7 +353,8 @@ func (s *Storage) Exec(ctx context.Context, queries []Query) (rowsAffected int64
 		}
 
 		var affected int64
-		affected, err = result.RowsAffected()
+		affected, _ = result.RowsAffected()
+		lastInsertID, _ = result.LastInsertId()
 
 		rowsAffected += affected
 	}

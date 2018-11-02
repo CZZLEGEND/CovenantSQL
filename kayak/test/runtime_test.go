@@ -17,45 +17,289 @@
 package test
 
 import (
+	"bytes"
+	"context"
+	"database/sql"
+	"errors"
+	"math/rand"
+	"net"
+	"net/rpc"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/CovenantSQL/CovenantSQL/kayak"
+	kl "github.com/CovenantSQL/CovenantSQL/kayak/log"
 	"github.com/CovenantSQL/CovenantSQL/proto"
+	"github.com/CovenantSQL/CovenantSQL/sqlchain/storage"
+	"github.com/CovenantSQL/CovenantSQL/utils"
+	"github.com/jordwest/mock-conn"
 	. "github.com/smartystreets/goconvey/convey"
 )
 
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
+var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func RandStringRunes(n int) string {
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+	}
+	return string(b)
+}
+
 type sqliteStorage struct {
+	st *storage.Storage
+}
+
+type queryStructure struct {
+	ConnID    uint64
+	SeqNo     uint64
+	Timestamp int64
+	Queries   []storage.Query
+}
+
+type queryResult struct {
+	LastInsertID int64
+	RowsAffected int64
 }
 
 func newSQLiteStorage(dsn string) (s *sqliteStorage, err error) {
+	s = &sqliteStorage{}
+	s.st, err = storage.New(dsn)
+	return
+}
+
+func (s *sqliteStorage) Encode(queries []storage.Query) (b []byte, err error) {
+	data := &queryStructure{
+		Queries: queries,
+	}
+
+	var enc *bytes.Buffer
+	if enc, err = utils.EncodeMsgPack(data); err == nil {
+		b = enc.Bytes()
+	}
+
+	return
 }
 
 func (s *sqliteStorage) Convert(dec []byte) (data interface{}, err error) {
+	data = &queryStructure{}
+	err = utils.DecodeMsgPack(dec, data)
+	return
 }
 
 func (s *sqliteStorage) Check(data interface{}) (err error) {
+	// no check
+	return nil
 }
 
 func (s *sqliteStorage) Commit(data interface{}) (result interface{}, err error) {
+	var d *queryStructure
+	var ok bool
+	if d, ok = data.(*queryStructure); !ok {
+		err = errors.New("invalid data")
+		return
+	}
+
+	var lastInsertID, rowsAffected int64
+	lastInsertID, rowsAffected, err = s.st.Exec(context.Background(), d.Queries)
+	result = &queryResult{
+		LastInsertID: lastInsertID,
+		RowsAffected: rowsAffected,
+	}
+
+	return
 }
 
-func TestRuntime(t *testing.T) {
-	Convey("runtime test", t, func() {
-		db, err := newSQLiteStorage(":memory:")
+func (s *sqliteStorage) Query(ctx context.Context, queries []storage.Query) (columns []string, types []string,
+	data [][]interface{}, err error) {
+	return s.st.Query(ctx, queries)
+}
+
+func (s *sqliteStorage) Close() {
+	if s.st != nil {
+		s.st.Close()
+	}
+}
+
+type fakeMux struct {
+	mux map[proto.NodeID]*fakeService
+}
+
+func newFakeMux() *fakeMux {
+	return &fakeMux{
+		mux: make(map[proto.NodeID]*fakeService),
+	}
+}
+
+func (m *fakeMux) register(nodeID proto.NodeID, s *fakeService) {
+	m.mux[nodeID] = s
+}
+
+func (m *fakeMux) get(nodeID proto.NodeID) *fakeService {
+	return m.mux[nodeID]
+}
+
+type fakeService struct {
+	rt *kayak.Runtime
+	s  *rpc.Server
+}
+
+func newFakeService(rt *kayak.Runtime) (fs *fakeService) {
+	fs = &fakeService{
+		rt: rt,
+		s:  rpc.NewServer(),
+	}
+
+	fs.s.RegisterName("Test", fs)
+
+	return
+}
+
+func (s *fakeService) Call(req *kayak.RPCRequest, resp *interface{}) (err error) {
+	return s.rt.FollowerApply(req.Log)
+}
+
+func (s *fakeService) serveConn(c net.Conn) {
+	s.s.ServeCodec(utils.GetMsgPackServerCodec(c))
+}
+
+type fakeCaller struct {
+	m      *fakeMux
+	target proto.NodeID
+}
+
+func newFakeCaller(m *fakeMux, nodeID proto.NodeID) *fakeCaller {
+	return &fakeCaller{
+		m:      m,
+		target: nodeID,
+	}
+}
+
+func (c *fakeCaller) Call(method string, req interface{}, resp interface{}) (err error) {
+	fakeConn := mock_conn.NewConn()
+
+	go c.m.get(c.target).serveConn(fakeConn.Server)
+	client := rpc.NewClientWithCodec(utils.GetMsgPackClientCodec(fakeConn.Client))
+	defer client.Close()
+
+	return client.Call(method, req, resp)
+}
+
+func BenchmarkNewRuntime(b *testing.B) {
+	Convey("runtime test", b, func(c C) {
+		db1, err := newSQLiteStorage("test1.db")
 		So(err, ShouldBeNil)
-		peers := proto.Peers{
+		defer func() {
+			db1.Close()
+			os.Remove("test1.db")
+		}()
+		db2, err := newSQLiteStorage("test2.db")
+		So(err, ShouldBeNil)
+		defer func() {
+			db2.Close()
+			os.Remove("test2.db")
+		}()
+
+		node1 := proto.NodeID("000005aa62048f85da4ae9698ed59c14ec0d48a88a07c15a32265634e7e64ade")
+		node2 := proto.NodeID("000005f4f22c06f76c43c4f48d5a7ec1309cc94030cbf9ebae814172884ac8b5")
+
+		peers := &proto.Peers{
 			PeersHeader: proto.PeersHeader{
-				Leader: proto.NodeID("000005aa62048f85da4ae9698ed59c14ec0d48a88a07c15a32265634e7e64ade"),
+				Leader: node1,
 				Servers: []proto.NodeID{
-					proto.NodeID("000005aa62048f85da4ae9698ed59c14ec0d48a88a07c15a32265634e7e64ade"),
-					proto.NodeID("000005f4f22c06f76c43c4f48d5a7ec1309cc94030cbf9ebae814172884ac8b5"),
+					node1,
+					node2,
 				},
 			},
 		}
-		cfg := &kayak.RuntimeConfig{
-			Storage:          db,
-			PrepareThreshold: 1,
-			CommitThreshold:  1,
+
+		pool1 := kl.NewMemPool()
+		cfg1 := &kayak.RuntimeConfig{
+			Storage:          db1,
+			PrepareThreshold: 2,
+			CommitThreshold:  2,
+			PrepareTimeout:   time.Second,
+			CommitTimeout:    10 * time.Second,
+			Peers:            peers,
+			Pool:             pool1,
+			NodeID:           node1,
+			ServiceName:      "Test",
+			MethodName:       "Call",
 		}
+		rt1, err := kayak.NewRuntime(cfg1)
+		So(err, ShouldBeNil)
+
+		pool2 := kl.NewMemPool()
+		cfg2 := &kayak.RuntimeConfig{
+			Storage:          db2,
+			PrepareThreshold: 2,
+			CommitThreshold:  2,
+			PrepareTimeout:   time.Second,
+			CommitTimeout:    10 * time.Second,
+			Peers:            peers,
+			Pool:             pool2,
+			NodeID:           node2,
+			ServiceName:      "Test",
+			MethodName:       "Call",
+		}
+		rt2, err := kayak.NewRuntime(cfg2)
+		So(err, ShouldBeNil)
+
+		m := newFakeMux()
+		fs1 := newFakeService(rt1)
+		m.register(node1, fs1)
+		fs2 := newFakeService(rt2)
+		m.register(node2, fs2)
+
+		rt1.SetCaller(node2, newFakeCaller(m, node2))
+		rt2.SetCaller(node1, newFakeCaller(m, node1))
+
+		rt1.Start()
+		defer rt1.Shutdown()
+
+		rt2.Start()
+		defer rt2.Shutdown()
+
+		q1, err := db1.Encode([]storage.Query{
+			{Pattern: "CREATE TABLE IF NOT EXISTS test (test string)"},
+		})
+		So(err, ShouldBeNil)
+
+		q2, err := db1.Encode([]storage.Query{
+			{
+				Pattern: "INSERT INTO test (test) VALUES(?)",
+				Args:    []sql.NamedArg{sql.Named("", RandStringRunes(1024))},
+			},
+		})
+
+		rt1.Apply(context.Background(), q1)
+		rt2.Apply(context.Background(), q2)
+		rt1.Apply(context.Background(), q2)
+		db1.Query(context.Background(), []storage.Query{
+			{Pattern: "SELECT * FROM test"},
+		})
+
+		b.ResetTimer()
+
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				q, err := db1.Encode([]storage.Query{
+					{
+						Pattern: "INSERT INTO test (test) VALUES(?)",
+						Args:    []sql.NamedArg{sql.Named("", RandStringRunes(10))},
+					},
+				})
+				_ = err
+				//c.So(err, ShouldBeNil)
+
+				_, _, err = rt1.Apply(context.Background(), q)
+				//c.So(err, ShouldBeNil)
+			}
+		})
 	})
 }

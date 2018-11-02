@@ -41,6 +41,10 @@ var (
 	ErrNotInPeer      = errors.New("node not in peer")
 )
 
+type Caller interface {
+	Call(method string, req interface{}, resp interface{}) error
+}
+
 // RuntimeConfig defines the runtime config of kayak.
 type RuntimeConfig struct {
 	Storage          Storage
@@ -133,7 +137,6 @@ type commitResult struct {
 
 type rpcTracker struct {
 	r        *Runtime
-	caller   []*rpc.PersistentCaller
 	nodes    []proto.NodeID
 	method   string
 	req      interface{}
@@ -352,7 +355,7 @@ func (r *Runtime) newLog(logType kt.LogType, data []byte) (l *kt.Log, err error)
 	return
 }
 
-func (r *Runtime) apply(ctx context.Context, data []byte) (result interface{}, logIndex uint64, err error) {
+func (r *Runtime) Apply(ctx context.Context, data []byte) (result interface{}, logIndex uint64, err error) {
 	r.peerLock.RLock()
 	defer r.peerLock.RUnlock()
 
@@ -567,7 +570,7 @@ func (r *Runtime) leaderLogRollback(i uint64) (*kt.Log, error) {
 }
 
 /// Follower logic
-func (r *Runtime) applyLog(l *kt.Log) (err error) {
+func (r *Runtime) FollowerApply(l *kt.Log) (err error) {
 	r.peerLock.RLock()
 	defer r.peerLock.RUnlock()
 
@@ -673,9 +676,13 @@ func (r *Runtime) rpc(l *kt.Log, minCount int) (tracker *rpcTracker) {
 	return
 }
 
-func (r *Runtime) getCaller(id proto.NodeID) *rpc.PersistentCaller {
+func (r *Runtime) getCaller(id proto.NodeID) Caller {
 	rawCaller, _ := r.callerMap.LoadOrStore(id, rpc.NewPersistentCaller(id))
-	return rawCaller.(*rpc.PersistentCaller)
+	return rawCaller.(Caller)
+}
+
+func (r *Runtime) SetCaller(id proto.NodeID, c Caller) {
+	r.callerMap.Store(id, c)
 }
 
 func (r *Runtime) goFunc(f func()) {
