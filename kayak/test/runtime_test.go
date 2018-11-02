@@ -21,10 +21,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math/rand"
 	"net"
 	"net/rpc"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -286,12 +288,16 @@ func BenchmarkNewRuntime(b *testing.B) {
 
 		b.ResetTimer()
 
+		var count uint64
+		atomic.StoreUint64(&count, 1)
+
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
+				atomic.AddUint64(&count, 1)
 				q, err := db1.Encode([]storage.Query{
 					{
 						Pattern: "INSERT INTO test (test) VALUES(?)",
-						Args:    []sql.NamedArg{sql.Named("", RandStringRunes(10))},
+						Args:    []sql.NamedArg{sql.Named("", RandStringRunes(1024))},
 					},
 				})
 				_ = err
@@ -301,5 +307,24 @@ func BenchmarkNewRuntime(b *testing.B) {
 				//c.So(err, ShouldBeNil)
 			}
 		})
+
+		b.StopTimer()
+
+		total := atomic.LoadUint64(&count)
+		_, _, d1, _ := db1.Query(context.Background(), []storage.Query{
+			{Pattern: "SELECT COUNT(1) FROM test"},
+		})
+		So(d1, ShouldHaveLength, 1)
+		So(d1[0], ShouldHaveLength, 1)
+		So(fmt.Sprint(d1[0][0]), ShouldEqual, fmt.Sprint(total))
+
+		_, _, d2, _ := db2.Query(context.Background(), []storage.Query{
+			{Pattern: "SELECT COUNT(1) FROM test"},
+		})
+		So(d2, ShouldHaveLength, 1)
+		So(d2[0], ShouldHaveLength, 1)
+		So(fmt.Sprint(d2[0][0]), ShouldResemble, fmt.Sprint(total))
+
+		b.StartTimer()
 	})
 }
