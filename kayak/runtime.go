@@ -359,11 +359,26 @@ func (r *Runtime) Apply(ctx context.Context, data []byte) (result interface{}, l
 	r.peerLock.RLock()
 	defer r.peerLock.RUnlock()
 
+	var tmStart, tmLeaderPrepare, tmFollowerPrepare, tmLeaderRollback, tmRollback, tmCommit time.Time
+
+	defer func() {
+		func(...interface{}) {}(tmStart, tmLeaderPrepare, tmFollowerPrepare, tmLeaderRollback, tmRollback, tmCommit)
+		log.WithFields(log.Fields{
+			"lp": tmLeaderPrepare.Sub(tmStart).String(),
+			"fp": tmFollowerPrepare.Sub(tmLeaderPrepare).String(),
+			"lr": tmLeaderRollback.Sub(tmFollowerPrepare).String(),
+			"fr": tmRollback.Sub(tmLeaderRollback).String(),
+			"c":  tmCommit.Sub(tmFollowerPrepare).String(),
+		}).Infof("do apply")
+	}()
+
 	if r.role != proto.Leader {
 		// not leader
 		err = ErrNotLeader
 		return
 	}
+
+	tmStart = time.Now()
 
 	// create prepare request
 	var prepareLog *kt.Log
@@ -373,6 +388,8 @@ func (r *Runtime) Apply(ctx context.Context, data []byte) (result interface{}, l
 		log.Fatal("FATAL")
 		return
 	}
+
+	tmLeaderPrepare = time.Now()
 
 	// send prepare to all nodes
 	prepareTracker := r.rpc(prepareLog, r.prepareThreshold-1)
@@ -389,6 +406,8 @@ func (r *Runtime) Apply(ctx context.Context, data []byte) (result interface{}, l
 	if err = r.errorSummary(prepareErrors); err != nil {
 		goto ROLLBACK
 	}
+
+	tmFollowerPrepare = time.Now()
 
 	select {
 	case cResult := <-r.commitResult(ctx, nil, prepareLog):
@@ -417,6 +436,8 @@ func (r *Runtime) Apply(ctx context.Context, data []byte) (result interface{}, l
 		goto ROLLBACK
 	}
 
+	tmCommit = time.Now()
+
 	return
 
 ROLLBACK:
@@ -429,8 +450,12 @@ ROLLBACK:
 		return
 	}
 
+	tmLeaderRollback = time.Now()
+
 	// async send rollback to all nodes
 	r.rpc(rollbackLog, 0)
+
+	tmRollback = time.Now()
 
 	return
 }
@@ -495,7 +520,9 @@ func (r *Runtime) commitCycle() {
 			continue
 		}
 
+		tm := time.Now()
 		r.doCommit(cReq)
+		log.WithField("c", time.Now().Sub(tm).String()).Info("do commit")
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/CovenantSQL/CovenantSQL/utils/log"
 	"math/rand"
 	"net"
 	"net/rpc"
@@ -194,6 +195,12 @@ func (c *fakeCaller) Call(method string, req interface{}, resp interface{}) (err
 
 func BenchmarkNewRuntime(b *testing.B) {
 	Convey("runtime test", b, func(c C) {
+		log.SetLevel(log.InfoLevel)
+		f, err := os.OpenFile("test.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		So(err, ShouldBeNil)
+		log.SetOutput(f)
+		defer f.Close()
+
 		db1, err := newSQLiteStorage("test1.db")
 		So(err, ShouldBeNil)
 		defer func() {
