@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,10 +69,12 @@ type Runtime struct {
 	followers []proto.NodeID
 	// peers lock for peers update logic.
 	peersLock sync.RWMutex
+	// calculated min follower nodes for prepare.
+	minPreparedFollowers int
+	// calculated min follower nodes for commit.
+	minCommitFollowers int
 
 	/// RPC related
-	// rpc mux service, register runtime to mux on start.
-	mux kt.Mux
 	// callerMap caches the caller for peering nodes.
 	callerMap sync.Map // map[proto.NodeID]Caller
 	// service name for mux service.
@@ -83,10 +86,9 @@ type Runtime struct {
 
 	//// Parameters
 	// prepare threshold defines the minimum node count requirement for prepare operation.
-	// ADVISE(): using value * len(nodes)
-	prepareThreshold int
+	prepareThreshold float64
 	// commit threshold defines the minimum node count requirement for commit operation.
-	commitThreshold int
+	commitThreshold float64
 	// prepare timeout defines the max allowed time for prepare operation.
 	prepareTimeout time.Duration
 	// commit timeout defines the max allowed time for commit operation.
@@ -143,21 +145,25 @@ func NewRuntime(cfg *kt.RuntimeConfig) (rt *Runtime, err error) {
 		return
 	}
 
+	minPreparedFollowers := int(math.Max(math.Ceil(cfg.PrepareThreshold*float64(len(peers.Servers))), 1) - 1)
+	minCommitFollowers := int(math.Max(math.Ceil(cfg.CommitThreshold*float64(len(peers.Servers))), 1) - 1)
+
 	rt = &Runtime{
 		// handler and logs
 		sh:      cfg.Handler,
 		logPool: cfg.Pool,
 
 		// peers
-		peers:     cfg.Peers,
-		nodeID:    cfg.NodeID,
-		followers: followers,
-		role:      role,
+		peers:                cfg.Peers,
+		nodeID:               cfg.NodeID,
+		followers:            followers,
+		role:                 role,
+		minPreparedFollowers: minPreparedFollowers,
+		minCommitFollowers:   minCommitFollowers,
 
 		// rpc related
 		serviceName: cfg.ServiceName,
 		rpcMethod:   fmt.Sprintf("%v.%v", cfg.ServiceName, cfg.MethodName),
-		mux:         cfg.Mux,
 		rpcTrackCh:  make(chan *rpcTracker, trackerWindow),
 
 		// commits related
@@ -183,21 +189,12 @@ func (r *Runtime) Start() {
 	r.goFunc(r.commitCycle)
 	// start rpc tracker collector
 
-	// bind to mux
-	if r.mux != nil {
-		r.mux.Register(r.instanceID, r)
-	}
 }
 
 // Shutdown waits for the Runtime to stop.
 func (r *Runtime) Shutdown() (err error) {
 	if !atomic.CompareAndSwapUint32(&r.started, 1, 2) {
 		return
-	}
-
-	// unbind from mux
-	if r.mux != nil {
-		r.mux.Unregister(r.instanceID)
 	}
 
 	select {
@@ -258,7 +255,7 @@ func (r *Runtime) Apply(ctx context.Context, data []byte) (result interface{}, l
 	tmLeaderPrepare = time.Now()
 
 	// send prepare to all nodes
-	prepareTracker := r.rpc(prepareLog, r.prepareThreshold-1)
+	prepareTracker := r.rpc(prepareLog, r.minPreparedFollowers)
 	prepareCtx, prepareCtxCancelFunc := context.WithTimeout(ctx, r.prepareTimeout)
 	defer prepareCtxCancelFunc()
 	prepareErrors, prepareDone, _ := prepareTracker.get(prepareCtx)
@@ -356,6 +353,14 @@ func (r *Runtime) FollowerApply(l *kt.Log) (err error) {
 		// do nothing
 		return r.followerNoop(l)
 	}
+
+	return
+}
+
+// UpdatePeers defines entry for peers update logic.
+func (r *Runtime) UpdatePeers(peers *proto.Peers) (err error) {
+	r.peersLock.Lock()
+	defer r.peersLock.Unlock()
 
 	return
 }
@@ -506,7 +511,7 @@ func (r *Runtime) leaderDoCommit(req *commitReq) (tracker *rpcTracker, result in
 	result, err = r.sh.Commit(req.data)
 
 	// send commit
-	tracker = r.rpc(l, r.commitThreshold-1)
+	tracker = r.rpc(l, r.minCommitFollowers)
 
 	// TODO(): text log for rpc errors
 

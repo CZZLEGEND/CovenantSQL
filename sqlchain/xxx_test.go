@@ -407,7 +407,7 @@ func createRandomBlockWithQueries(genesis, parent hash.Hash, acks []*wt.SignedAc
 	}
 
 	for _, ack := range acks {
-		b.PushAckedQuery(&ack.HeaderHash)
+		b.PushAckedQuery(&ack.Hash)
 	}
 
 	err = b.PackAndSignBlock(priv)

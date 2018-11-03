@@ -26,10 +26,10 @@ import (
 type RuntimeConfig struct {
 	// underlying handler.
 	Handler Handler
-	// minimum node count requirement for prepare operation.
-	PrepareThreshold int
-	// minimum node count requirement for commit operation.
-	CommitThreshold int
+	// minimum rpc success node percent requirement for prepare operation.
+	PrepareThreshold float64
+	// minimum rpc success node percent requirement for commit operation.
+	CommitThreshold float64
 	// maximum allowed time for prepare operation.
 	PrepareTimeout time.Duration
 	// maximum allowed time for commit operation.
@@ -44,6 +44,4 @@ type RuntimeConfig struct {
 	ServiceName string
 	// mux service method.
 	MethodName string
-	// mux service.
-	Mux Mux
 }

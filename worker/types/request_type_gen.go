@@ -45,6 +45,46 @@ func (z QueryType) Msgsize() (s int) {
 }
 
 // MarshalHash marshals for hash
+func (z *Request) MarshalHash() (o []byte, err error) {
+	var b []byte
+	o = hsp.Require(b, z.Msgsize())
+	// map header, size 3
+	// map header, size 1
+	o = append(o, 0x83, 0x83, 0x81, 0x81)
+	o = hsp.AppendArrayHeader(o, uint32(len(z.Payload.Queries)))
+	for za0001 := range z.Payload.Queries {
+		if oTemp, err := z.Payload.Queries[za0001].MarshalHash(); err != nil {
+			return nil, err
+		} else {
+			o = hsp.AppendBytes(o, oTemp)
+		}
+	}
+	o = append(o, 0x83)
+	if oTemp, err := z.Header.MarshalHash(); err != nil {
+		return nil, err
+	} else {
+		o = hsp.AppendBytes(o, oTemp)
+	}
+	o = append(o, 0x83)
+	if oTemp, err := z.Envelope.MarshalHash(); err != nil {
+		return nil, err
+	} else {
+		o = hsp.AppendBytes(o, oTemp)
+	}
+	return
+}
+
+// Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
+func (z *Request) Msgsize() (s int) {
+	s = 1 + 8 + 1 + 8 + hsp.ArrayHeaderSize
+	for za0001 := range z.Payload.Queries {
+		s += z.Payload.Queries[za0001].Msgsize()
+	}
+	s += 7 + z.Header.Msgsize() + 9 + z.Envelope.Msgsize()
+	return
+}
+
+// MarshalHash marshals for hash
 func (z *RequestHeader) MarshalHash() (o []byte, err error) {
 	var b []byte
 	o = hsp.Require(b, z.Msgsize())
@@ -87,6 +127,32 @@ func (z *RequestHeader) Msgsize() (s int) {
 }
 
 // MarshalHash marshals for hash
+func (z *RequestPayload) MarshalHash() (o []byte, err error) {
+	var b []byte
+	o = hsp.Require(b, z.Msgsize())
+	// map header, size 1
+	o = append(o, 0x81, 0x81)
+	o = hsp.AppendArrayHeader(o, uint32(len(z.Queries)))
+	for za0001 := range z.Queries {
+		if oTemp, err := z.Queries[za0001].MarshalHash(); err != nil {
+			return nil, err
+		} else {
+			o = hsp.AppendBytes(o, oTemp)
+		}
+	}
+	return
+}
+
+// Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
+func (z *RequestPayload) Msgsize() (s int) {
+	s = 1 + 8 + hsp.ArrayHeaderSize
+	for za0001 := range z.Queries {
+		s += z.Queries[za0001].Msgsize()
+	}
+	return
+}
+
+// MarshalHash marshals for hash
 func (z *SignedRequestHeader) MarshalHash() (o []byte, err error) {
 	var b []byte
 	o = hsp.Require(b, z.Msgsize())
@@ -118,7 +184,7 @@ func (z *SignedRequestHeader) MarshalHash() (o []byte, err error) {
 		o = hsp.AppendBytes(o, oTemp)
 	}
 	o = append(o, 0x84)
-	if oTemp, err := z.HeaderHash.MarshalHash(); err != nil {
+	if oTemp, err := z.Hash.MarshalHash(); err != nil {
 		return nil, err
 	} else {
 		o = hsp.AppendBytes(o, oTemp)
@@ -140,6 +206,6 @@ func (z *SignedRequestHeader) Msgsize() (s int) {
 	} else {
 		s += z.Signature.Msgsize()
 	}
-	s += 14 + z.RequestHeader.Msgsize() + 11 + z.HeaderHash.Msgsize()
+	s += 14 + z.RequestHeader.Msgsize() + 5 + z.Hash.Msgsize()
 	return
 }

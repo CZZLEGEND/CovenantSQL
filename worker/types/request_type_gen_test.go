@@ -46,6 +46,43 @@ func BenchmarkAppendMsgQueryKey(b *testing.B) {
 	}
 }
 
+func TestMarshalHashRequest(t *testing.T) {
+	v := Request{}
+	binary.Read(rand.Reader, binary.BigEndian, &v)
+	bts1, err := v.MarshalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bts2, err := v.MarshalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(bts1, bts2) {
+		t.Fatal("hash not stable")
+	}
+}
+
+func BenchmarkMarshalHashRequest(b *testing.B) {
+	v := Request{}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		v.MarshalHash()
+	}
+}
+
+func BenchmarkAppendMsgRequest(b *testing.B) {
+	v := Request{}
+	bts := make([]byte, 0, v.Msgsize())
+	bts, _ = v.MarshalHash()
+	b.SetBytes(int64(len(bts)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bts, _ = v.MarshalHash()
+	}
+}
+
 func TestMarshalHashRequestHeader(t *testing.T) {
 	v := RequestHeader{}
 	binary.Read(rand.Reader, binary.BigEndian, &v)
@@ -73,6 +110,43 @@ func BenchmarkMarshalHashRequestHeader(b *testing.B) {
 
 func BenchmarkAppendMsgRequestHeader(b *testing.B) {
 	v := RequestHeader{}
+	bts := make([]byte, 0, v.Msgsize())
+	bts, _ = v.MarshalHash()
+	b.SetBytes(int64(len(bts)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bts, _ = v.MarshalHash()
+	}
+}
+
+func TestMarshalHashRequestPayload(t *testing.T) {
+	v := RequestPayload{}
+	binary.Read(rand.Reader, binary.BigEndian, &v)
+	bts1, err := v.MarshalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bts2, err := v.MarshalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(bts1, bts2) {
+		t.Fatal("hash not stable")
+	}
+}
+
+func BenchmarkMarshalHashRequestPayload(b *testing.B) {
+	v := RequestPayload{}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		v.MarshalHash()
+	}
+}
+
+func BenchmarkAppendMsgRequestPayload(b *testing.B) {
+	v := RequestPayload{}
 	bts := make([]byte, 0, v.Msgsize())
 	bts, _ = v.MarshalHash()
 	b.SetBytes(int64(len(bts)))

@@ -30,7 +30,8 @@ import (
 	"github.com/CovenantSQL/CovenantSQL/crypto/asymmetric"
 	"github.com/CovenantSQL/CovenantSQL/crypto/kms"
 	"github.com/CovenantSQL/CovenantSQL/kayak"
-	ka "github.com/CovenantSQL/CovenantSQL/kayak/api"
+	kl "github.com/CovenantSQL/CovenantSQL/kayak/log"
+	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
 	"github.com/CovenantSQL/CovenantSQL/proto"
 	"github.com/CovenantSQL/CovenantSQL/sqlchain"
 	"github.com/CovenantSQL/CovenantSQL/sqlchain/storage"
@@ -46,6 +47,9 @@ const (
 	// StorageFileName defines storage file name of database instance.
 	StorageFileName = "storage.db3"
 
+	// KayakFilePoolName defines log pool name of database instance.
+	KayakFilePoolName = "kayak.pool"
+
 	// SQLChainFileName defines sqlchain storage file name.
 	SQLChainFileName = "chain.db"
 
@@ -59,14 +63,16 @@ type Database struct {
 	dbID           proto.DatabaseID
 	storage        *storage.Storage
 	kayakRuntime   *kayak.Runtime
-	kayakConfig    kayak.Config
+	kayakConfig    *kt.RuntimeConfig
 	connSeqs       sync.Map
 	connSeqEvictCh chan uint64
 	chain          *sqlchain.Chain
+	nodeID         proto.NodeID
+	mux            *DBKayakMuxService
 }
 
 // NewDatabase create a single database instance using config.
-func NewDatabase(cfg *DBConfig, peers *kayak.Peers, genesisBlock *ct.Block) (db *Database, err error) {
+func NewDatabase(cfg *DBConfig, peers *proto.Peers, genesisBlock *ct.Block) (db *Database, err error) {
 	// ensure dir exists
 	if err = os.MkdirAll(cfg.DataDir, 0755); err != nil {
 		return
@@ -81,6 +87,7 @@ func NewDatabase(cfg *DBConfig, peers *kayak.Peers, genesisBlock *ct.Block) (db 
 	db = &Database{
 		cfg:            cfg,
 		dbID:           cfg.DatabaseID,
+		mux:            cfg.KayakMux,
 		connSeqEvictCh: make(chan uint64, 1),
 	}
 
@@ -120,9 +127,8 @@ func NewDatabase(cfg *DBConfig, peers *kayak.Peers, genesisBlock *ct.Block) (db 
 	}
 
 	// init chain
-	var nodeID proto.NodeID
 	chainFile := filepath.Join(cfg.DataDir, SQLChainFileName)
-	if nodeID, err = kms.GetLocalNodeID(); err != nil {
+	if db.nodeID, err = kms.GetLocalNodeID(); err != nil {
 		return
 	}
 
@@ -136,9 +142,7 @@ func NewDatabase(cfg *DBConfig, peers *kayak.Peers, genesisBlock *ct.Block) (db 
 		// TODO(xq262144): should refactor server/node definition to conf/proto package
 		// currently sqlchain package only use Server.ID as node id
 		MuxService: cfg.ChainMux,
-		Server: &kayak.Server{
-			ID: nodeID,
-		},
+		Server:     db.nodeID,
 
 		// TODO(xq262144): currently using fixed period/resolution from sqlchain test case
 		Period:   60 * time.Second,
@@ -152,18 +156,35 @@ func NewDatabase(cfg *DBConfig, peers *kayak.Peers, genesisBlock *ct.Block) (db 
 	}
 
 	// init kayak config
-	options := ka.NewDefaultTwoPCOptions().WithTransportID(string(cfg.DatabaseID))
-	db.kayakConfig = ka.NewTwoPCConfigWithOptions(cfg.DataDir, cfg.KayakMux, db, options)
+	var kayakPool kt.Pool
+	if kayakPool, err = kl.NewLevelDBPool(filepath.Join(cfg.DataDir, KayakFilePoolName)); err != nil {
+		err = errors.Wrap(err, "init kayak log pool failed")
+		return
+	}
+
+	db.kayakConfig = &kt.RuntimeConfig{
+		Handler:          db,
+		PrepareThreshold: 1.0,
+		CommitThreshold:  1.0,
+		PrepareTimeout:   time.Second,
+		CommitTimeout:    time.Second,
+		Peers:            peers,
+		Pool:             kayakPool,
+		NodeID:           db.nodeID,
+		ServiceName:      DBKayakRPCName,
+		MethodName:       DBKayakMethodName,
+	}
 
 	// create kayak runtime
-	if db.kayakRuntime, err = ka.NewTwoPCKayak(peers, db.kayakConfig); err != nil {
+	if db.kayakRuntime, err = kayak.NewRuntime(db.kayakConfig); err != nil {
 		return
 	}
 
-	// init kayak runtime
-	if err = db.kayakRuntime.Init(); err != nil {
-		return
-	}
+	// register kayak runtime rpc
+	db.mux.register(db.dbID, db.kayakRuntime)
+
+	// start kayak runtime
+	db.kayakRuntime.Start()
 
 	// init sequence eviction processor
 	go db.evictSequences()
@@ -172,7 +193,7 @@ func NewDatabase(cfg *DBConfig, peers *kayak.Peers, genesisBlock *ct.Block) (db 
 }
 
 // UpdatePeers defines peers update query interface.
-func (db *Database) UpdatePeers(peers *kayak.Peers) (err error) {
+func (db *Database) UpdatePeers(peers *proto.Peers) (err error) {
 	if err = db.kayakRuntime.UpdatePeers(peers); err != nil {
 		return
 	}
@@ -215,6 +236,9 @@ func (db *Database) Shutdown() (err error) {
 		if err = db.kayakRuntime.Shutdown(); err != nil {
 			return
 		}
+
+		// unregister
+		db.mux.unregister(db.dbID)
 	}
 
 	if db.chain != nil {
@@ -289,7 +313,7 @@ func (db *Database) writeQuery(request *wt.Request) (response *wt.Response, err 
 
 	var logOffset uint64
 	var result interface{}
-	result, logOffset, err = db.kayakRuntime.Apply(buf.Bytes())
+	result, logOffset, err = db.kayakRuntime.Apply(context.Background(), buf.Bytes())
 
 	if err != nil {
 		return

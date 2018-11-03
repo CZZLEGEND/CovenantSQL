@@ -17,19 +17,17 @@
 package types
 
 import (
-	"bytes"
 	"database/sql"
-	"encoding/binary"
 	"time"
 
 	"github.com/CovenantSQL/CovenantSQL/crypto/asymmetric"
 	"github.com/CovenantSQL/CovenantSQL/crypto/hash"
 	"github.com/CovenantSQL/CovenantSQL/proto"
-	"github.com/CovenantSQL/CovenantSQL/utils"
+	hsp "github.com/CovenantSQL/HashStablePack/marshalhash"
 )
 
 //go:generate hsp
-//hsp:ignore Query Queries Payload RequestPayload Request
+//hsp:ignore Query
 
 // QueryType enumerates available query type, currently read/write.
 type QueryType int32
@@ -45,17 +43,6 @@ const (
 type Query struct {
 	Pattern string
 	Args    []sql.NamedArg
-}
-
-func (t QueryType) String() string {
-	switch t {
-	case ReadQuery:
-		return "read"
-	case WriteQuery:
-		return "write"
-	default:
-		return "unknown"
-	}
 }
 
 // RequestPayload defines a queries payload.
@@ -85,9 +72,9 @@ type QueryKey struct {
 // SignedRequestHeader defines a signed query request header.
 type SignedRequestHeader struct {
 	RequestHeader
-	HeaderHash hash.Hash             `json:"hh"`
-	Signee     *asymmetric.PublicKey `json:"e"`
-	Signature  *asymmetric.Signature `json:"s"`
+	Hash      hash.Hash             `json:"hh"`
+	Signee    *asymmetric.PublicKey `json:"e"`
+	Signature *asymmetric.Signature `json:"s"`
 }
 
 // Request defines a complete query request.
@@ -97,67 +84,54 @@ type Request struct {
 	Payload RequestPayload      `json:"p"`
 }
 
-// Serialize returns byte based binary form of struct.
-func (p *RequestPayload) Serialize() []byte {
-	// HACK(xq262144): currently use idiomatic serialization for hash generation
-	buf, _ := utils.EncodeMsgPack(p)
-
-	return buf.Bytes()
+func (t QueryType) String() string {
+	switch t {
+	case ReadQuery:
+		return "read"
+	case WriteQuery:
+		return "write"
+	default:
+		return "unknown"
+	}
 }
 
-// Serialize returns bytes based binary form of struct.
-func (h *RequestHeader) Serialize() []byte {
-	if h == nil {
-		return []byte{'\000'}
+// MarshalHash defines marshal hash for Query type.
+func (q *Query) MarshalHash() (o []byte, err error) {
+	// Refactored from original hsp generated code
+	var b []byte
+	o = hsp.Require(b, q.Msgsize())
+	// map header, size 2
+	o = append(o, 0x82, 0x82)
+	o = hsp.AppendArrayHeader(o, uint32(len(q.Args)))
+	for i := range q.Args {
+		if o, err = hsp.AppendIntf(o, q.Args[i]); err != nil {
+			return nil, err
+		}
 	}
-
-	buf := new(bytes.Buffer)
-
-	binary.Write(buf, binary.LittleEndian, h.QueryType)
-	binary.Write(buf, binary.LittleEndian, uint64(len(h.NodeID)))
-	buf.WriteString(string(h.NodeID))
-	buf.WriteString(string(h.DatabaseID))
-	binary.Write(buf, binary.LittleEndian, h.ConnectionID)
-	binary.Write(buf, binary.LittleEndian, h.SeqNo)
-	binary.Write(buf, binary.LittleEndian, int64(h.Timestamp.UnixNano())) // use nanoseconds unix epoch
-	binary.Write(buf, binary.LittleEndian, h.BatchCount)
-	buf.Write(h.QueriesHash[:])
-
-	return buf.Bytes()
+	o = append(o, 0x82)
+	o = hsp.AppendString(o, q.Pattern)
+	return
 }
 
-// Serialize returns bytes based binary form of struct.
-func (sh *SignedRequestHeader) Serialize() []byte {
-	if sh == nil {
-		return []byte{'\000'}
+// Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message.
+func (q *Query) Msgsize() (s int) {
+	// Refactored from original hsp generated code
+	s = 1 + 5 + hsp.ArrayHeaderSize
+	for i := range q.Args {
+		s += hsp.GuessSize(q.Args[i])
 	}
-
-	buf := new(bytes.Buffer)
-
-	buf.Write(sh.RequestHeader.Serialize())
-	buf.Write(sh.HeaderHash[:])
-	if sh.Signee != nil {
-		buf.Write(sh.Signee.Serialize())
-	} else {
-		buf.WriteRune('\000')
-	}
-	if sh.Signature != nil {
-		buf.Write(sh.Signature.Serialize())
-	} else {
-		buf.WriteRune('\000')
-	}
-
-	return buf.Bytes()
+	s += 8 + hsp.StringPrefixSize + len(q.Pattern)
+	return
 }
 
 // Verify checks hash and signature in request header.
 func (sh *SignedRequestHeader) Verify() (err error) {
 	// verify hash
-	if err = verifyHash(&sh.RequestHeader, &sh.HeaderHash); err != nil {
+	if err = verifyHash(&sh.RequestHeader, &sh.Hash); err != nil {
 		return
 	}
 	// verify sign
-	if sh.Signee == nil || sh.Signature == nil || !sh.Signature.Verify(sh.HeaderHash[:], sh.Signee) {
+	if sh.Signee == nil || sh.Signature == nil || !sh.Signature.Verify(sh.Hash[:], sh.Signee) {
 		return ErrSignVerification
 	}
 	return nil
@@ -166,31 +140,19 @@ func (sh *SignedRequestHeader) Verify() (err error) {
 // Sign the request.
 func (sh *SignedRequestHeader) Sign(signer *asymmetric.PrivateKey) (err error) {
 	// compute hash
-	buildHash(&sh.RequestHeader, &sh.HeaderHash)
+	if err = buildHash(&sh.RequestHeader, &sh.Hash); err != nil {
+		return
+	}
 
 	if signer == nil {
 		return ErrSignRequest
 	}
 
 	// sign
-	sh.Signature, err = signer.Sign(sh.HeaderHash[:])
+	sh.Signature, err = signer.Sign(sh.Hash[:])
 	sh.Signee = signer.PubKey()
 
 	return
-}
-
-// Serialize returns bytes based binary form of struct.
-func (r *Request) Serialize() []byte {
-	if r == nil {
-		return []byte{'\000'}
-	}
-
-	buf := new(bytes.Buffer)
-
-	buf.Write(r.Header.Serialize())
-	buf.Write(r.Payload.Serialize())
-
-	return buf.Bytes()
 }
 
 // Verify checks hash and signature in whole request.
@@ -209,7 +171,9 @@ func (r *Request) Sign(signer *asymmetric.PrivateKey) (err error) {
 	r.Header.BatchCount = uint64(len(r.Payload.Queries))
 
 	// compute payload hash
-	buildHash(&r.Payload, &r.Header.QueriesHash)
+	if err = buildHash(&r.Payload, &r.Header.QueriesHash); err != nil {
+		return
+	}
 
 	return r.Header.Sign(signer)
 }
