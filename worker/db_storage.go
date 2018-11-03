@@ -21,7 +21,6 @@ import (
 	"context"
 
 	"github.com/CovenantSQL/CovenantSQL/sqlchain/storage"
-	"github.com/CovenantSQL/CovenantSQL/twopc"
 	"github.com/CovenantSQL/CovenantSQL/utils"
 	wt "github.com/CovenantSQL/CovenantSQL/worker/types"
 	"github.com/pkg/errors"
@@ -29,75 +28,25 @@ import (
 
 // Following contains storage related logic extracted from main database instance definition.
 
-// Prepare implements twopc.Worker.Prepare.
-func (db *Database) Prepare(ctx context.Context, wb twopc.WriteBatch) (err error) {
-	// wrap storage with signature check
-	var log *storage.ExecLog
-	if log, err = db.convertRequest(wb); err != nil {
-		return
-	}
-	return db.storage.Prepare(ctx, log)
-}
-
-// Commit implements twopc.Worker.Commmit.
-func (db *Database) Commit(ctx context.Context, wb twopc.WriteBatch) (result interface{}, err error) {
-	// wrap storage with signature check
-	var log *storage.ExecLog
-	if log, err = db.convertRequest(wb); err != nil {
-		return
-	}
-	db.recordSequence(log)
-	return db.storage.Commit(ctx, log)
-}
-
-// Rollback implements twopc.Worker.Rollback.
-func (db *Database) Rollback(ctx context.Context, wb twopc.WriteBatch) (err error) {
-	// wrap storage with signature check
-	var log *storage.ExecLog
-	if log, err = db.convertRequest(wb); err != nil {
-		return
-	}
-	db.recordSequence(log)
-	return db.storage.Rollback(ctx, log)
-}
-
-func (db *Database) recordSequence(log *storage.ExecLog) {
-	db.connSeqs.Store(log.ConnectionID, log.SeqNo)
-}
-
-func (db *Database) verifySequence(log *storage.ExecLog) (err error) {
-	var data interface{}
-	var ok bool
-	var lastSeq uint64
-
-	if data, ok = db.connSeqs.Load(log.ConnectionID); ok {
-		lastSeq, _ = data.(uint64)
-
-		if log.SeqNo <= lastSeq {
-			return ErrInvalidRequestSeq
-		}
-	}
-
+// Convert implements kayak.types.Handler.Convert.
+func (db *Database) Convert(data []byte) (rawReq interface{}, err error) {
+	// decode
+	var req wt.Request
+	err = utils.DecodeMsgPack(data, &req)
+	rawReq = req
 	return
 }
 
-func (db *Database) convertRequest(wb twopc.WriteBatch) (log *storage.ExecLog, err error) {
+// Check implements kayak.types.Handler.Check.
+func (db *Database) Check(rawReq interface{}) (err error) {
+	var req *wt.Request
 	var ok bool
-
-	// type convert
-	var payloadBytes []byte
-	if payloadBytes, ok = wb.([]byte); !ok {
+	if req, ok = rawReq.(*wt.Request); !ok || req == nil {
 		err = errors.Wrap(ErrInvalidRequest, "invalid request payload")
 		return
 	}
 
-	// decode
-	var req wt.Request
-	if err = utils.DecodeMsgPack(payloadBytes, &req); err != nil {
-		return
-	}
-
-	// verify
+	// verify signature, check time/sequence only
 	if err = req.Verify(); err != nil {
 		return
 	}
@@ -112,20 +61,52 @@ func (db *Database) convertRequest(wb twopc.WriteBatch) (log *storage.ExecLog, e
 		return
 	}
 
-	// convert
-	log = new(storage.ExecLog)
-	log.ConnectionID = req.Header.ConnectionID
-	log.SeqNo = req.Header.SeqNo
-	log.Timestamp = req.Header.Timestamp.UnixNano()
-
-	// sanitize dangerous query
-	if log.Queries, err = convertAndSanitizeQuery(req.Payload.Queries); err != nil {
+	// verify sequence
+	if err = db.verifySequence(req.Header.ConnectionID, req.Header.SeqNo); err != nil {
 		return
 	}
 
-	// verify connection sequence
-	if err = db.verifySequence(log); err != nil {
+	// record sequence
+	db.recordSequence(req.Header.ConnectionID, req.Header.SeqNo)
+
+	return
+}
+
+// Commit implements kayak.types.Handler.Commmit.
+func (db *Database) Commit(rawReq interface{}) (result interface{}, err error) {
+	// convert query and check syntax
+	var req *wt.Request
+	var ok bool
+	if req, ok = rawReq.(*wt.Request); !ok || req == nil {
+		err = errors.Wrap(ErrInvalidRequest, "invalid request payload")
 		return
+	}
+
+	var queries []storage.Query
+	if queries, err = convertAndSanitizeQuery(req.Payload.Queries); err != nil {
+		// return original parser error
+		return
+	}
+
+	// execute
+	return db.storage.Exec(context.Background(), queries)
+}
+
+func (db *Database) recordSequence(connID uint64, seqNo uint64) {
+	db.connSeqs.Store(connID, seqNo)
+}
+
+func (db *Database) verifySequence(connID uint64, seqNo uint64) (err error) {
+	var data interface{}
+	var ok bool
+	var lastSeq uint64
+
+	if data, ok = db.connSeqs.Load(connID); ok {
+		lastSeq, _ = data.(uint64)
+
+		if seqNo <= lastSeq {
+			return ErrInvalidRequestSeq
+		}
 	}
 
 	return

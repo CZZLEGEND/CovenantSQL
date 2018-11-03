@@ -26,6 +26,7 @@ import (
 // PeersHeader defines the header for miner peers.
 type PeersHeader struct {
 	Version uint64
+	Term    uint64
 	Leader  NodeID
 	Servers []NodeID
 }

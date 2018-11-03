@@ -18,7 +18,6 @@ package worker
 
 import (
 	"bytes"
-	"github.com/pkg/errors"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -31,6 +30,7 @@ import (
 	"github.com/CovenantSQL/CovenantSQL/utils"
 	"github.com/CovenantSQL/CovenantSQL/utils/log"
 	wt "github.com/CovenantSQL/CovenantSQL/worker/types"
+	"github.com/pkg/errors"
 )
 
 const (
@@ -297,7 +297,7 @@ func (dbms *DBMS) GetRequest(dbID proto.DatabaseID, offset uint64) (query *wt.Re
 	}
 
 	var reqBytes []byte
-	if reqBytes, err = db.kayakRuntime.GetLog(offset); err != nil {
+	if reqBytes, err = db.getLog(offset); err != nil {
 		return
 	}
 

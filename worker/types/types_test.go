@@ -615,8 +615,8 @@ func TestInitServiceResponse_Sign(t *testing.T) {
 							DatabaseID: proto.DatabaseID("db1"),
 							Peers: &proto.Peers{
 								PeersHeader: proto.PeersHeader{
-									Version: uint64(1),
-									Leader:  proto.NodeID("0000000000000000000000000000000000000000000000000000000000003333"),
+									Term:   uint64(1),
+									Leader: proto.NodeID("0000000000000000000000000000000000000000000000000000000000003333"),
 									Servers: []proto.NodeID{
 										proto.NodeID("0000000000000000000000000000000000000000000000000000000000003333"),
 										proto.NodeID("0000000000000000000000000000000000000000000000000000000000002222"),
@@ -675,8 +675,8 @@ func TestUpdateService_Sign(t *testing.T) {
 						DatabaseID: proto.DatabaseID("db1"),
 						Peers: &proto.Peers{
 							PeersHeader: proto.PeersHeader{
-								Version: uint64(1),
-								Leader:  proto.NodeID("0000000000000000000000000000000000000000000000000000000000003333"),
+								Term:   uint64(1),
+								Leader: proto.NodeID("0000000000000000000000000000000000000000000000000000000000003333"),
 								Servers: []proto.NodeID{
 									proto.NodeID("0000000000000000000000000000000000000000000000000000000000003333"),
 									proto.NodeID("0000000000000000000000000000000000000000000000000000000000002222"),

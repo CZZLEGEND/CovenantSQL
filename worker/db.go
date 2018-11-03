@@ -55,6 +55,12 @@ const (
 
 	// MaxRecordedConnectionSequences defines the max connection slots to anti reply attack.
 	MaxRecordedConnectionSequences = 1000
+
+	// PrepareThreshold defines the prepare complete threshold.
+	PrepareThreshold = 1.0
+
+	// CommitThreshold defines the commit complete threshold.
+	CommitThreshold = 1.0
 )
 
 // Database defines a single database instance in worker runtime.
@@ -62,6 +68,7 @@ type Database struct {
 	cfg            *DBConfig
 	dbID           proto.DatabaseID
 	storage        *storage.Storage
+	kayakPool      kt.Pool
 	kayakRuntime   *kayak.Runtime
 	kayakConfig    *kt.RuntimeConfig
 	connSeqs       sync.Map
@@ -156,20 +163,19 @@ func NewDatabase(cfg *DBConfig, peers *proto.Peers, genesisBlock *ct.Block) (db 
 	}
 
 	// init kayak config
-	var kayakPool kt.Pool
-	if kayakPool, err = kl.NewLevelDBPool(filepath.Join(cfg.DataDir, KayakFilePoolName)); err != nil {
+	if db.kayakPool, err = kl.NewLevelDBPool(filepath.Join(cfg.DataDir, KayakFilePoolName)); err != nil {
 		err = errors.Wrap(err, "init kayak log pool failed")
 		return
 	}
 
 	db.kayakConfig = &kt.RuntimeConfig{
 		Handler:          db,
-		PrepareThreshold: 1.0,
-		CommitThreshold:  1.0,
+		PrepareThreshold: PrepareThreshold,
+		CommitThreshold:  CommitThreshold,
 		PrepareTimeout:   time.Second,
-		CommitTimeout:    time.Second,
+		CommitTimeout:    time.Second * 60,
 		Peers:            peers,
-		Pool:             kayakPool,
+		Pool:             db.kayakPool,
 		NodeID:           db.nodeID,
 		ServiceName:      DBKayakRPCName,
 		MethodName:       DBKayakMethodName,
@@ -348,6 +354,18 @@ func (db *Database) readQuery(request *wt.Request) (response *wt.Response, err e
 	}
 
 	return db.buildQueryResponse(request, 0, columns, types, data, 0, 0)
+}
+
+func (db *Database) getLog(index uint64) (data []byte, err error) {
+	var l *kt.Log
+	if l, err = db.kayakPool.Get(index); err != nil || l == nil {
+		err = errors.Wrap(err, "get log from kayak pool failed")
+		return
+	}
+
+	data = l.Data
+
+	return
 }
 
 func (db *Database) buildQueryResponse(request *wt.Request, offset uint64,

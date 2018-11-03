@@ -480,7 +480,7 @@ func (s *Service) minerRequest(dbID proto.DatabaseID, method string, request int
 		return
 	}
 
-	return s.caller.CallNode(instance.Peers.Leader.ID, method, request, response)
+	return s.caller.CallNode(instance.Peers.Leader, method, request, response)
 }
 
 func (s *Service) getUpstream(dbID proto.DatabaseID) (instance *wt.ServiceInstance, err error) {
