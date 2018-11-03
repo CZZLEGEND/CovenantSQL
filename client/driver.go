@@ -51,7 +51,7 @@ var (
 
 	driverInitialized   uint32
 	peersUpdaterRunning uint32
-	peerList            sync.Map // map[proto.DatabaseID]*kayak.Peers
+	peerList            sync.Map // map[proto.DatabaseID]*proto.Peers
 	connIDLock          sync.Mutex
 	connIDAvail         []uint64
 	globalSeqNo         uint64

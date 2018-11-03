@@ -17,13 +17,11 @@
 package types
 
 import (
-	"bytes"
 	"database/sql"
 	"testing"
 	"time"
 
 	"github.com/CovenantSQL/CovenantSQL/crypto/asymmetric"
-	"github.com/CovenantSQL/CovenantSQL/kayak"
 	"github.com/CovenantSQL/CovenantSQL/proto"
 	"github.com/pkg/errors"
 	. "github.com/smartystreets/goconvey/convey"
@@ -215,9 +213,7 @@ func TestResponse_Sign(t *testing.T) {
 			},
 		}
 
-		var data *bytes.Buffer
 		var err error
-		var rres Response
 
 		// sign directly, embedded original request is not filled
 		err = res.Sign(privKey)
@@ -303,9 +299,7 @@ func TestAck_Sign(t *testing.T) {
 			},
 		}
 
-		var data *bytes.Buffer
 		var err error
-		var rack Ack
 
 		Convey("get query key", func() {
 			key := ack.Header.SignedRequestHeader().GetQueryKey()
@@ -510,20 +504,13 @@ func TestAggrNoAckReport_Sign(t *testing.T) {
 							},
 						},
 					},
-					Peers: &kayak.Peers{
-						Term: uint64(1),
-						Leader: &kayak.Server{
-							Role: proto.Leader,
-							ID:   proto.NodeID("0000000000000000000000000000000000000000000000000000000000003333"),
-						},
-						Servers: []*kayak.Server{
-							{
-								Role: proto.Leader,
-								ID:   proto.NodeID("0000000000000000000000000000000000000000000000000000000000003333"),
-							},
-							{
-								Role: proto.Follower,
-								ID:   proto.NodeID("0000000000000000000000000000000000000000000000000000000000002222"),
+					Peers: &proto.Peers{
+						PeersHeader: proto.PeersHeader{
+							Term:   uint64(1),
+							Leader: proto.NodeID("0000000000000000000000000000000000000000000000000000000000003333"),
+							Servers: []proto.NodeID{
+								proto.NodeID("0000000000000000000000000000000000000000000000000000000000003333"),
+								proto.NodeID("0000000000000000000000000000000000000000000000000000000000002222"),
 							},
 						},
 					},

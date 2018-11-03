@@ -166,8 +166,8 @@ func main() {
 				}
 
 				newInstance.DatabaseID = instance.DatabaseID
-				// re-construct peers structure
-				newInstance.Peers = instance.Peers
+				// TODO: re-construct peers structure
+				// newInstance.Peers = instance.Peers
 				newInstance.ResourceMeta = instance.ResourceMeta
 				newInstance.GenesisBlock = &ct.Block{
 					SignedHeader: instance.GenesisBlock.SignedHeader,

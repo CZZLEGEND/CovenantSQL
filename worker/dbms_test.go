@@ -24,7 +24,6 @@ import (
 
 	"github.com/CovenantSQL/CovenantSQL/crypto/asymmetric"
 	"github.com/CovenantSQL/CovenantSQL/crypto/kms"
-	"github.com/CovenantSQL/CovenantSQL/kayak"
 	"github.com/CovenantSQL/CovenantSQL/proto"
 	"github.com/CovenantSQL/CovenantSQL/route"
 	"github.com/CovenantSQL/CovenantSQL/rpc"
@@ -66,7 +65,7 @@ func TestDBMS(t *testing.T) {
 		// add database
 		var req *wt.UpdateService
 		var res wt.UpdateServiceResponse
-		var peers *kayak.Peers
+		var peers *proto.Peers
 		var block *ct.Block
 
 		dbID := proto.DatabaseID("db")

@@ -66,11 +66,6 @@ type queryStructure struct {
 	Queries   []storage.Query
 }
 
-type queryResult struct {
-	LastInsertID int64
-	RowsAffected int64
-}
-
 func newSQLiteStorage(dsn string) (s *sqliteStorage, err error) {
 	s = &sqliteStorage{}
 	s.st, err = storage.New(dsn)
@@ -110,12 +105,7 @@ func (s *sqliteStorage) Commit(data interface{}) (result interface{}, err error)
 	}
 
 	tm := time.Now()
-	var lastInsertID, rowsAffected int64
-	lastInsertID, rowsAffected, err = s.st.Exec(context.Background(), d.Queries)
-	result = &queryResult{
-		LastInsertID: lastInsertID,
-		RowsAffected: rowsAffected,
-	}
+	result, err = s.st.Exec(context.Background(), d.Queries)
 	log.WithField("c", time.Now().Sub(tm).String()).Info("db commit")
 
 	return
