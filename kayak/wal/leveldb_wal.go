@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package log
+package wal
 
 import (
 	"bytes"
@@ -36,8 +36,8 @@ var (
 	baseIndexKey = []byte{'B', 'I'}
 )
 
-// LevelDBPool defines a pool using leveldb as storage.
-type LevelDBPool struct {
+// LevelDBWal defines a pool using leveldb as storage.
+type LevelDBWal struct {
 	db     *leveldb.DB
 	closed uint32
 
@@ -49,9 +49,9 @@ type LevelDBPool struct {
 	pending     []uint64
 }
 
-// NewLevelDBPool returns new leveldb pool instance.
-func NewLevelDBPool(filename string) (p *LevelDBPool, err error) {
-	p = &LevelDBPool{}
+// NewLevelDBWal returns new leveldb pool instance.
+func NewLevelDBWal(filename string) (p *LevelDBWal, err error) {
+	p = &LevelDBWal{}
 	if p.db, err = leveldb.OpenFile(filename, nil); err != nil {
 		err = errors.Wrap(err, "open database failed")
 	}
@@ -74,8 +74,8 @@ func NewLevelDBPool(filename string) (p *LevelDBPool, err error) {
 	return
 }
 
-// Write implements Pool.Write.
-func (p *LevelDBPool) Write(l *kt.Log) (err error) {
+// Write implements Wal.Write.
+func (p *LevelDBWal) Write(l *kt.Log) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -140,8 +140,8 @@ func (p *LevelDBPool) Write(l *kt.Log) (err error) {
 	return
 }
 
-// Read implements Pool.Read.
-func (p *LevelDBPool) Read() (l *kt.Log, err error) {
+// Read implements Wal.Read.
+func (p *LevelDBWal) Read() (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -170,8 +170,8 @@ func (p *LevelDBPool) Read() (l *kt.Log, err error) {
 	return
 }
 
-// Seek implements Pool.Seek.
-func (p *LevelDBPool) Seek(offset uint64) (err error) {
+// Seek implements Wal.Seek.
+func (p *LevelDBWal) Seek(offset uint64) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -181,8 +181,8 @@ func (p *LevelDBPool) Seek(offset uint64) (err error) {
 	return
 }
 
-// Truncate implements Pool.Truncate.
-func (p *LevelDBPool) Truncate() (err error) {
+// Truncate implements Wal.Truncate.
+func (p *LevelDBWal) Truncate() (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -214,8 +214,8 @@ func (p *LevelDBPool) Truncate() (err error) {
 	return
 }
 
-// Get implements Pool.Get.
-func (p *LevelDBPool) Get(i uint64) (l *kt.Log, err error) {
+// Get implements Wal.Get.
+func (p *LevelDBWal) Get(i uint64) (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -247,8 +247,8 @@ func (p *LevelDBPool) Get(i uint64) (l *kt.Log, err error) {
 	return
 }
 
-// Close implements Pool.Close.
-func (p *LevelDBPool) Close() {
+// Close implements Wal.Close.
+func (p *LevelDBWal) Close() {
 	if !atomic.CompareAndSwapUint32(&p.closed, 0, 1) {
 		return
 	}
@@ -258,12 +258,12 @@ func (p *LevelDBPool) Close() {
 	}
 }
 
-func (p *LevelDBPool) uint64ToBytes(o uint64) (res []byte) {
+func (p *LevelDBWal) uint64ToBytes(o uint64) (res []byte) {
 	res = make([]byte, 8)
 	binary.BigEndian.PutUint64(res, o)
 	return
 }
 
-func (p *LevelDBPool) bytesToUint64(b []byte) uint64 {
+func (p *LevelDBWal) bytesToUint64(b []byte) uint64 {
 	return binary.BigEndian.Uint64(b)
 }

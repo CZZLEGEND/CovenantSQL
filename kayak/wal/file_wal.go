@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package log
+package wal
 
 import (
 	"encoding/json"
@@ -45,8 +45,8 @@ type fileIndex struct {
 	LogIndex     map[uint64]int64
 }
 
-// FilePool defines pool using plain file as storage.
-type FilePool struct {
+// FileWal defines pool using plain file as storage.
+type FileWal struct {
 	sync.RWMutex
 	closed uint32
 
@@ -54,9 +54,9 @@ type FilePool struct {
 	fi fileIndex
 }
 
-// NewFilePool return new file pool for log.
-func NewFilePool(filename string) (p *FilePool, err error) {
-	p = &FilePool{}
+// NewFileWal return new file pool for log.
+func NewFileWal(filename string) (p *FileWal, err error) {
+	p = &FileWal{}
 
 	indexFileName := filename + ".index"
 
@@ -126,8 +126,8 @@ func NewFilePool(filename string) (p *FilePool, err error) {
 	return
 }
 
-// Write implements Pool.Write.
-func (p *FilePool) Write(l *kt.Log) (err error) {
+// Write implements Wal.Write.
+func (p *FileWal) Write(l *kt.Log) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -137,8 +137,8 @@ func (p *FilePool) Write(l *kt.Log) (err error) {
 	return
 }
 
-// Read implements Pool.Read.
-func (p *FilePool) Read() (l *kt.Log, err error) {
+// Read implements Wal.Read.
+func (p *FileWal) Read() (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -148,8 +148,8 @@ func (p *FilePool) Read() (l *kt.Log, err error) {
 	return
 }
 
-// Seek implements Pool.Seek.
-func (p *FilePool) Seek(offset uint64) (err error) {
+// Seek implements Wal.Seek.
+func (p *FileWal) Seek(offset uint64) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -159,8 +159,8 @@ func (p *FilePool) Seek(offset uint64) (err error) {
 	return
 }
 
-// Truncate implements Pool.Truncate.
-func (p *FilePool) Truncate() (err error) {
+// Truncate implements Wal.Truncate.
+func (p *FileWal) Truncate() (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -170,8 +170,8 @@ func (p *FilePool) Truncate() (err error) {
 	return
 }
 
-// Get implements Pool.Get.
-func (p *FilePool) Get(index uint64) (l *kt.Log, err error) {
+// Get implements Wal.Get.
+func (p *FileWal) Get(index uint64) (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -182,7 +182,7 @@ func (p *FilePool) Get(index uint64) (l *kt.Log, err error) {
 }
 
 // Close implements Pooo.Close.
-func (p *FilePool) Close() {
+func (p *FileWal) Close() {
 	if atomic.CompareAndSwapUint32(&p.closed, 0, 1) {
 		return
 	}

@@ -30,8 +30,8 @@ import (
 	"github.com/CovenantSQL/CovenantSQL/crypto/asymmetric"
 	"github.com/CovenantSQL/CovenantSQL/crypto/kms"
 	"github.com/CovenantSQL/CovenantSQL/kayak"
-	kl "github.com/CovenantSQL/CovenantSQL/kayak/log"
 	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
+	kl "github.com/CovenantSQL/CovenantSQL/kayak/wal"
 	"github.com/CovenantSQL/CovenantSQL/proto"
 	"github.com/CovenantSQL/CovenantSQL/sqlchain"
 	"github.com/CovenantSQL/CovenantSQL/sqlchain/storage"
@@ -68,7 +68,7 @@ type Database struct {
 	cfg            *DBConfig
 	dbID           proto.DatabaseID
 	storage        *storage.Storage
-	kayakPool      kt.Pool
+	kayakPool      kt.Wal
 	kayakRuntime   *kayak.Runtime
 	kayakConfig    *kt.RuntimeConfig
 	connSeqs       sync.Map
@@ -163,7 +163,7 @@ func NewDatabase(cfg *DBConfig, peers *proto.Peers, genesisBlock *ct.Block) (db 
 	}
 
 	// init kayak config
-	if db.kayakPool, err = kl.NewLevelDBPool(filepath.Join(cfg.DataDir, KayakFilePoolName)); err != nil {
+	if db.kayakPool, err = kl.NewLevelDBWal(filepath.Join(cfg.DataDir, KayakFilePoolName)); err != nil {
 		err = errors.Wrap(err, "init kayak log pool failed")
 		return
 	}

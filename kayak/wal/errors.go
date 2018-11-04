@@ -14,4 +14,19 @@
  * limitations under the License.
  */
 
-package log
+package wal
+
+import "github.com/pkg/errors"
+
+var (
+	// ErrPoolClosed represents the log file is closed.
+	ErrPoolClosed = errors.New("log is closed")
+	// ErrInvalidLog represents the log object is invalid.
+	ErrInvalidLog = errors.New("invalid log")
+	// ErrTruncated represents the log exists but truncated.
+	ErrTruncated = errors.New("log truncated")
+	// ErrAlreadyExists represents the log already exists.
+	ErrAlreadyExists = errors.New("log already exists")
+	// ErrNotExists represents the log does not exists.
+	ErrNotExists = errors.New("log not exists")
+)

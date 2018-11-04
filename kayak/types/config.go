@@ -37,7 +37,7 @@ type RuntimeConfig struct {
 	// init peers of node.
 	Peers *proto.Peers
 	// log pool for kayak.
-	Pool Pool
+	Pool Wal
 	// current node id.
 	NodeID proto.NodeID
 	// mux service name.

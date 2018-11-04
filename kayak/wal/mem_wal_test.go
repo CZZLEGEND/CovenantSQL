@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package log
+package wal
 
 import (
 	"sync"
@@ -26,8 +26,8 @@ import (
 
 func TestMemPool_Write(t *testing.T) {
 	Convey("test mem pool write", t, func() {
-		var p *MemPool
-		p = NewMemPool()
+		var p *MemWal
+		p = NewMemWal()
 
 		l1 := &kt.Log{
 			LogHeader: kt.LogHeader{
@@ -175,8 +175,8 @@ func TestMemPool_Write2(t *testing.T) {
 		}
 
 		var wg sync.WaitGroup
-		var p *MemPool
-		p = NewMemPool()
+		var p *MemWal
+		p = NewMemWal()
 
 		wg.Add(1)
 		go func() {

@@ -31,8 +31,8 @@ import (
 	"time"
 
 	"github.com/CovenantSQL/CovenantSQL/kayak"
-	kl "github.com/CovenantSQL/CovenantSQL/kayak/log"
 	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
+	kl "github.com/CovenantSQL/CovenantSQL/kayak/wal"
 	"github.com/CovenantSQL/CovenantSQL/proto"
 	"github.com/CovenantSQL/CovenantSQL/sqlchain/storage"
 	"github.com/CovenantSQL/CovenantSQL/utils"
@@ -220,7 +220,7 @@ func BenchmarkNewRuntime(b *testing.B) {
 			},
 		}
 
-		pool1 := kl.NewMemPool()
+		pool1 := kl.NewMemWal()
 		cfg1 := &kt.RuntimeConfig{
 			Handler:          db1,
 			PrepareThreshold: 2,
@@ -236,7 +236,7 @@ func BenchmarkNewRuntime(b *testing.B) {
 		rt1, err := kayak.NewRuntime(cfg1)
 		So(err, ShouldBeNil)
 
-		pool2 := kl.NewMemPool()
+		pool2 := kl.NewMemWal()
 		cfg2 := &kt.RuntimeConfig{
 			Handler:          db2,
 			PrepareThreshold: 2,

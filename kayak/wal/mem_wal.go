@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package log
+package wal
 
 import (
 	"io"
@@ -25,8 +25,8 @@ import (
 	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
 )
 
-// MemPool defines pool using memory as storage.
-type MemPool struct {
+// MemWal defines pool using memory as storage.
+type MemWal struct {
 	sync.RWMutex
 	logs     []*kt.Log
 	revIndex map[uint64]int
@@ -39,17 +39,17 @@ type MemPool struct {
 	closed       uint32
 }
 
-// NewMemPool returns new memory pool instance.
-func NewMemPool() (p *MemPool) {
-	p = &MemPool{
+// NewMemWal returns new memory pool instance.
+func NewMemWal() (p *MemWal) {
+	p = &MemWal{
 		revIndex: make(map[uint64]int),
 	}
 
 	return
 }
 
-// Write implements Pool.Write.
-func (p *MemPool) Write(l *kt.Log) (err error) {
+// Write implements Wal.Write.
+func (p *MemWal) Write(l *kt.Log) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -103,8 +103,8 @@ func (p *MemPool) Write(l *kt.Log) (err error) {
 	return
 }
 
-// Read implements Pool.Read.
-func (p *MemPool) Read() (l *kt.Log, err error) {
+// Read implements Wal.Read.
+func (p *MemWal) Read() (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -125,8 +125,8 @@ func (p *MemPool) Read() (l *kt.Log, err error) {
 	return
 }
 
-// Seek implements Pool.Seek.
-func (p *MemPool) Seek(offset uint64) (err error) {
+// Seek implements Wal.Seek.
+func (p *MemWal) Seek(offset uint64) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -136,8 +136,8 @@ func (p *MemPool) Seek(offset uint64) (err error) {
 	return
 }
 
-// Truncate implements Pool.Truncate.
-func (p *MemPool) Truncate() (err error) {
+// Truncate implements Wal.Truncate.
+func (p *MemWal) Truncate() (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -168,8 +168,8 @@ func (p *MemPool) Truncate() (err error) {
 	return
 }
 
-// Get implements Pool.Get.
-func (p *MemPool) Get(index uint64) (l *kt.Log, err error) {
+// Get implements Wal.Get.
+func (p *MemWal) Get(index uint64) (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
 		err = ErrPoolClosed
 		return
@@ -195,8 +195,8 @@ func (p *MemPool) Get(index uint64) (l *kt.Log, err error) {
 	return
 }
 
-// Close implements Pool.Close.
-func (p *MemPool) Close() {
+// Close implements Wal.Close.
+func (p *MemWal) Close() {
 	if !atomic.CompareAndSwapUint32(&p.closed, 0, 1) {
 		return
 	}

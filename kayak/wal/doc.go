@@ -14,14 +14,4 @@
  * limitations under the License.
  */
 
-package types
-
-// Pool defines the log storage interface.
-type Pool interface {
-	Write(*Log) error
-	Read() (*Log, error)
-	Seek(offset uint64) error
-	Truncate() error
-	Get(index uint64) (*Log, error)
-	Close()
-}
+package wal

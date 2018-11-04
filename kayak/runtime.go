@@ -25,8 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	kl "github.com/CovenantSQL/CovenantSQL/kayak/log"
 	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
+	kl "github.com/CovenantSQL/CovenantSQL/kayak/wal"
 	"github.com/CovenantSQL/CovenantSQL/proto"
 	"github.com/CovenantSQL/CovenantSQL/rpc"
 	"github.com/CovenantSQL/CovenantSQL/utils/log"
@@ -56,7 +56,7 @@ type Runtime struct {
 	// e.g. use database id for SQLChain scenario.
 	instanceID string
 	// logPool defines the pool for kayak logs.
-	logPool kt.Pool
+	logPool kt.Wal
 	// underlying handler
 	sh kt.Handler
 

@@ -30,8 +30,8 @@ import (
 	"github.com/CovenantSQL/CovenantSQL/conf"
 	"github.com/CovenantSQL/CovenantSQL/crypto/kms"
 	"github.com/CovenantSQL/CovenantSQL/kayak"
-	kl "github.com/CovenantSQL/CovenantSQL/kayak/log"
 	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
+	kl "github.com/CovenantSQL/CovenantSQL/kayak/wal"
 	"github.com/CovenantSQL/CovenantSQL/metric"
 	"github.com/CovenantSQL/CovenantSQL/proto"
 	"github.com/CovenantSQL/CovenantSQL/route"
@@ -206,8 +206,8 @@ func initKayakTwoPC(rootDir string, node *proto.Node, peers *proto.Peers, h kt.H
 	// create kayak config
 	log.Info("create kayak config")
 
-	var logPool kt.Pool
-	if logPool, err = kl.NewLevelDBPool(filepath.Join(rootDir, kayakFilePoolName)); err != nil {
+	var logPool kt.Wal
+	if logPool, err = kl.NewLevelDBWal(filepath.Join(rootDir, kayakFilePoolName)); err != nil {
 		err = errors.Wrap(err, "init kayak log pool failed")
 		return
 	}
