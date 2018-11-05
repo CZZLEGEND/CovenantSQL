@@ -443,7 +443,7 @@ func (s *DBService) allocateNodes(lastTerm uint64, dbID proto.DatabaseID, resour
 			}
 
 			// build peers
-			return s.buildPeers(lastTerm+1, nodes, nodeAllocated)
+			return s.buildPeers(lastTerm+1, nodeAllocated)
 		}
 
 		curRange += int(resourceMeta.Node)
@@ -478,7 +478,7 @@ func (s *DBService) getMetric(metric metric.MetricMap, keys []string) (value uin
 	return
 }
 
-func (s *DBService) buildPeers(term uint64, nodes []proto.Node, allocated []proto.NodeID) (peers *proto.Peers, err error) {
+func (s *DBService) buildPeers(term uint64, allocated []proto.NodeID) (peers *proto.Peers, err error) {
 	log.WithFields(log.Fields{
 		"term":  term,
 		"nodes": allocated,
@@ -491,31 +491,12 @@ func (s *DBService) buildPeers(term uint64, nodes []proto.Node, allocated []prot
 	}
 
 	// get allocated node info
-	allocatedMap := make(map[proto.NodeID]bool)
-
-	for _, nodeID := range allocated {
-		allocatedMap[nodeID] = true
-	}
-
-	allocatedNodes := make([]proto.Node, 0, len(allocated))
-
-	for _, node := range nodes {
-		if allocatedMap[node.ID] {
-			allocatedNodes = append(allocatedNodes, node)
-		}
-	}
-
 	peers = &proto.Peers{
 		PeersHeader: proto.PeersHeader{
 			Term:    term,
-			Servers: make([]proto.NodeID, len(allocated)),
+			Servers: allocated,
 		},
 	}
-
-	for idx, node := range allocatedNodes {
-		peers.Servers[idx] = node.ID
-	}
-
 	// choose the first node as leader, allocateNodes sort the allocated node list by memory size
 	peers.Leader = peers.Servers[0]
 

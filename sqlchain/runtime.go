@@ -18,6 +18,7 @@ package sqlchain
 
 import (
 	"fmt"
+	"github.com/CovenantSQL/CovenantSQL/utils/log"
 	"sync"
 	"time"
 
@@ -100,6 +101,11 @@ func newRunTime(c *Config) (r *runtime) {
 			if index, found := c.Peers.Find(c.Server); found {
 				return index
 			}
+
+			log.WithFields(log.Fields{
+				"node":  c.Server,
+				"peers": c.Peers,
+			}).Warning("could not found server in peers")
 
 			return -1
 		}(),

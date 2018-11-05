@@ -68,7 +68,7 @@ type Database struct {
 	cfg            *DBConfig
 	dbID           proto.DatabaseID
 	storage        *storage.Storage
-	kayakWal       kt.Wal
+	kayakWal       *kl.LevelDBWal
 	kayakRuntime   *kayak.Runtime
 	kayakConfig    *kt.RuntimeConfig
 	connSeqs       sync.Map
@@ -247,6 +247,11 @@ func (db *Database) Shutdown() (err error) {
 
 		// unregister
 		db.mux.unregister(db.dbID)
+	}
+
+	if db.kayakWal != nil {
+		// shutdown, stop kayak
+		db.kayakWal.Close()
 	}
 
 	if db.chain != nil {

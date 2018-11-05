@@ -18,7 +18,9 @@ package kayak
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -42,10 +44,13 @@ const (
 type Runtime struct {
 	/// Indexes
 	// index for next log.
-	nextIndex uint64
-	// nextFinished = last finished prepared log + 1.
-	// prepare log index before nextFinished is treated as finished.
-	nextFinished uint64
+	nextIndexLock sync.Mutex
+	nextIndex     uint64
+	// lastCommit, last commit log index
+	lastCommit uint64
+	// pendingPrepares, prepares needs to be committed/rollback
+	pendingPrepares     map[uint64]bool
+	pendingPreparesLock sync.RWMutex
 
 	/// Runtime entities
 	// current node id.
@@ -119,6 +124,13 @@ type commitResult struct {
 // NewRuntime creates new kayak Runtime.
 func NewRuntime(cfg *kt.RuntimeConfig) (rt *Runtime, err error) {
 	peers := cfg.Peers
+
+	// verify peers
+	if err = peers.Verify(); err != nil {
+		err = errors.Wrap(err, "verify peers during kayak init failed")
+		return
+	}
+
 	followers := make([]proto.NodeID, 0, len(peers.Servers))
 	exists := false
 	var role proto.ServerRole
@@ -148,6 +160,9 @@ func NewRuntime(cfg *kt.RuntimeConfig) (rt *Runtime, err error) {
 	minCommitFollowers := int(math.Max(math.Ceil(cfg.CommitThreshold*float64(len(peers.Servers))), 1) - 1)
 
 	rt = &Runtime{
+		// indexes
+		pendingPrepares: make(map[uint64]bool, commitWindow*2),
+
 		// handler and logs
 		sh:  cfg.Handler,
 		wal: cfg.Wal,
@@ -176,22 +191,26 @@ func NewRuntime(cfg *kt.RuntimeConfig) (rt *Runtime, err error) {
 		stopCh: make(chan struct{}),
 	}
 
+	// read from pool to rebuild uncommitted log map
+	if err = rt.readLogs(); err != nil {
+		return
+	}
+
 	return
 }
 
 // Start starts the Runtime.
-func (r *Runtime) Start() {
+func (r *Runtime) Start() (err error) {
 	if !atomic.CompareAndSwapUint32(&r.started, 0, 1) {
 		return
 	}
 
-	// read from pool to rebuild uncommitted log map
-	// TODO():
-
 	// start commit cycle
 	r.goFunc(r.commitCycle)
 	// start rpc tracker collector
+	// TODO():
 
+	return
 }
 
 // Shutdown waits for the Runtime to stop.
@@ -246,6 +265,12 @@ func (r *Runtime) Apply(ctx context.Context, data interface{}) (result interface
 	}
 
 	tmStart = time.Now()
+
+	// check leader
+	if err = r.sh.Check(data); err != nil {
+		err = errors.Wrap(err, "leader verify log")
+		return
+	}
 
 	// create prepare request
 	var prepareLog *kt.Log
@@ -344,17 +369,21 @@ func (r *Runtime) FollowerApply(l *kt.Log) (err error) {
 	// verify log structure
 	switch l.Type {
 	case kt.LogPrepare:
-		return r.followerPrepare(l)
+		err = r.followerPrepare(l)
 	case kt.LogRollback:
-		return r.followerRollback(l)
+		err = r.followerRollback(l)
 	case kt.LogCommit:
-		return r.followerCommit(l)
+		err = r.followerCommit(l)
 	case kt.LogBarrier:
 		// support barrier for log truncation and peer update
 		fallthrough
 	case kt.LogNoop:
 		// do nothing
-		return r.followerNoop(l)
+		err = r.followerNoop(l)
+	}
+
+	if err == nil {
+		r.updateNextIndex(l)
 	}
 
 	return
@@ -375,7 +404,7 @@ func (r *Runtime) leaderLogPrepare(data interface{}) (*kt.Log, error) {
 
 func (r *Runtime) leaderLogRollback(i uint64) (*kt.Log, error) {
 	// just write new log
-	return r.newLog(kt.LogRollback, i)
+	return r.newLog(kt.LogRollback, r.uint64ToBytes(i))
 }
 
 func (r *Runtime) followerPrepare(l *kt.Log) (err error) {
@@ -390,12 +419,21 @@ func (r *Runtime) followerPrepare(l *kt.Log) (err error) {
 		return
 	}
 
+	r.markPendingPrepare(l.Index)
+
 	return
 }
 
 func (r *Runtime) followerRollback(l *kt.Log) (err error) {
-	if _, err = r.getPrepareLog(l); err != nil {
-		err = errors.Wrap(err, "get original request failed")
+	var prepareLog *kt.Log
+	if _, prepareLog, err = r.getPrepareLog(l); err != nil || prepareLog == nil {
+		err = errors.Wrap(err, "get original request in rollback failed")
+		return
+	}
+
+	// check if prepare already processed
+	if r.checkIfPrepareFinished(prepareLog.Index) {
+		err = errors.Wrap(kt.ErrInvalidLog, "prepare request already processed")
 		return
 	}
 
@@ -409,8 +447,37 @@ func (r *Runtime) followerRollback(l *kt.Log) (err error) {
 
 func (r *Runtime) followerCommit(l *kt.Log) (err error) {
 	var prepareLog *kt.Log
-	if prepareLog, err = r.getPrepareLog(l); err != nil {
-		err = errors.Wrap(err, "get original request failed")
+	var lastCommit uint64
+	if lastCommit, prepareLog, err = r.getPrepareLog(l); err != nil {
+		err = errors.Wrap(err, "get original request in commit failed")
+		return
+	}
+
+	// check if prepare already processed
+	if r.checkIfPrepareFinished(prepareLog.Index) {
+		err = errors.Wrap(kt.ErrInvalidLog, "prepare request already processed")
+		return
+	}
+
+	myLastCommit := atomic.LoadUint64(&r.lastCommit)
+
+	// check committed index
+	if lastCommit < myLastCommit {
+		// leader pushed a early index before commit
+		log.WithFields(log.Fields{
+			"head":     myLastCommit,
+			"supplied": lastCommit,
+		}).Warning("Invalid last commit log")
+		err = errors.Wrap(kt.ErrInvalidLog, "invalid last commit log index")
+		return
+	} else if lastCommit > myLastCommit {
+		// last log does not committed yet
+		// DO RECOVERY
+		log.WithFields(log.Fields{
+			"expected": lastCommit,
+			"actual":   myLastCommit,
+		}).Warning("DO RECOVERY, REQUIRED LAST COMMITTED DOES NOT COMMIT YET")
+		err = errors.Wrap(kt.ErrNeedRecovery, "last commit does not received, need recovery")
 		return
 	}
 
@@ -490,9 +557,12 @@ func (r *Runtime) leaderDoCommit(req *commitReq) (tracker *rpcTracker, result in
 
 	// create leader log
 	var l *kt.Log
+	var logData []byte
 
-	if l, err = r.newLog(kt.LogCommit, req.index); err != nil {
-		// TODO(): record last commit
+	logData = append(logData, r.uint64ToBytes(req.index)...)
+	logData = append(logData, r.uint64ToBytes(atomic.LoadUint64(&r.lastCommit))...)
+
+	if l, err = r.newLog(kt.LogCommit, logData); err != nil {
 		// serve error, leader could not write log
 		return
 	}
@@ -502,6 +572,11 @@ func (r *Runtime) leaderDoCommit(req *commitReq) (tracker *rpcTracker, result in
 
 	// send commit
 	tracker = r.rpc(l, r.minCommitFollowers)
+
+	if err == nil {
+		// mark last commit
+		atomic.StoreUint64(&r.lastCommit, l.Index)
+	}
 
 	// TODO(): text log for rpc errors
 
@@ -525,37 +600,32 @@ func (r *Runtime) followerDoCommit(req *commitReq) (err error) {
 	// do commit, not wrapping underlying handler commit error
 	_, err = r.sh.Commit(req.data)
 
+	if err == nil {
+		atomic.StoreUint64(&r.lastCommit, req.log.Index)
+	}
+
 	return
 }
 
-func (r *Runtime) getPrepareLog(l *kt.Log) (pl *kt.Log, err error) {
+func (r *Runtime) getPrepareLog(l *kt.Log) (lastCommitIndex uint64, pl *kt.Log, err error) {
 	var prepareIndex uint64
+	var dataBytes []byte
+	var ok bool
 
-	// convert number to uint64
-	switch v := l.Data.(type) {
-	case int:
-		prepareIndex = uint64(v)
-	case uint:
-		prepareIndex = uint64(v)
-	case int8:
-		prepareIndex = uint64(v)
-	case int16:
-		prepareIndex = uint64(v)
-	case int32:
-		prepareIndex = uint64(v)
-	case int64:
-		prepareIndex = uint64(v)
-	case uint8:
-		prepareIndex = uint64(v)
-	case uint16:
-		prepareIndex = uint64(v)
-	case uint32:
-		prepareIndex = uint64(v)
-	case uint64:
-		prepareIndex = uint64(v)
-	default:
-		err = errors.Wrap(kt.ErrInvalidLog, "log does not contains a valid prepare log index")
+	if dataBytes, ok = l.Data.([]byte); !ok {
+		err = errors.Wrap(kt.ErrInvalidLog, "log does not contain valid payload")
 		return
+	}
+
+	// decode prepare index
+	if prepareIndex, err = r.bytesToUint64(dataBytes); err != nil {
+		err = errors.Wrap(err, "log does not contain valid prepare index")
+		return
+	}
+
+	// decode commit index
+	if len(dataBytes) >= 16 {
+		lastCommitIndex, _ = r.bytesToUint64(dataBytes[8:])
 	}
 
 	pl, err = r.wal.Get(prepareIndex)
@@ -565,7 +635,10 @@ func (r *Runtime) getPrepareLog(l *kt.Log) (pl *kt.Log, err error) {
 
 func (r *Runtime) newLog(logType kt.LogType, data interface{}) (l *kt.Log, err error) {
 	// allocate index
-	i := atomic.AddUint64(&r.nextIndex, 1) - 1
+	r.nextIndexLock.Lock()
+	i := r.nextIndex
+	r.nextIndex++
+	r.nextIndexLock.Unlock()
 	l = &kt.Log{
 		LogHeader: kt.LogHeader{
 			Index:    i,
@@ -577,10 +650,101 @@ func (r *Runtime) newLog(logType kt.LogType, data interface{}) (l *kt.Log, err e
 
 	// error write will be a fatal error, cause to node to fail fast
 	if err = r.wal.Write(l); err != nil {
-		log.Fatal("WRITE LOG FAILED")
+		log.Fatalf("WRITE LOG FAILED: %v", err)
 	}
 
 	return
+}
+
+func (r *Runtime) readLogs() (err error) {
+	// load logs, only called during init
+	var l *kt.Log
+
+	for {
+		if l, err = r.wal.Read(); err != nil && err != io.EOF {
+			err = errors.Wrap(err, "load previous logs in wal failed")
+			break
+		} else if err == io.EOF {
+			err = nil
+			break
+		}
+
+		switch l.Type {
+		case kt.LogPrepare:
+			// record in pending prepares
+			r.pendingPrepares[l.Index] = true
+		case kt.LogCommit:
+			// record last commit
+			var lastCommit uint64
+			var prepareLog *kt.Log
+			if lastCommit, prepareLog, err = r.getPrepareLog(l); err != nil {
+				err = errors.Wrap(err, "previous prepare does not exists, node need full recovery")
+				break
+			}
+			if lastCommit != r.lastCommit {
+				err = errors.Wrapf(err,
+					"last commit record in wal mismatched (expected: %v, actual: %v)", r.lastCommit, lastCommit)
+				break
+			}
+			if !r.pendingPrepares[prepareLog.Index] {
+				err = errors.Wrap(kt.ErrInvalidLog, "previous prepare already committed/rollback")
+				break
+			}
+			r.lastCommit = l.Index
+			// resolve previous prepared
+			delete(r.pendingPrepares, prepareLog.Index)
+		case kt.LogRollback:
+			var prepareLog *kt.Log
+			if _, prepareLog, err = r.getPrepareLog(l); err != nil {
+				err = errors.Wrap(err, "previous prepare doe snot exists, node need full recovery")
+				return
+			}
+			if !r.pendingPrepares[prepareLog.Index] {
+				err = errors.Wrap(kt.ErrInvalidLog, "previous prepare already committed/rollback")
+				break
+			}
+			// resolve previous prepared
+			delete(r.pendingPrepares, prepareLog.Index)
+		default:
+			err = errors.Wrapf(kt.ErrInvalidLog, "invalid log type: %v", l.Type)
+			break
+		}
+
+		// record nextIndex
+		r.updateNextIndex(l)
+	}
+
+	return
+}
+
+func (r *Runtime) updateNextIndex(l *kt.Log) {
+	r.nextIndexLock.Lock()
+	defer r.nextIndexLock.Unlock()
+
+	if r.nextIndex < l.Index+1 {
+		r.nextIndex = l.Index + 1
+	}
+}
+
+func (r *Runtime) checkIfPrepareFinished(index uint64) (finished bool) {
+	r.pendingPreparesLock.RLock()
+	defer r.pendingPreparesLock.RUnlock()
+
+	return !r.pendingPrepares[index]
+}
+
+func (r *Runtime) markPendingPrepare(index uint64) {
+	r.pendingPreparesLock.Lock()
+	defer r.pendingPreparesLock.Unlock()
+
+	r.pendingPrepares[index] = true
+}
+
+func (r *Runtime) markPrepareFinished(index uint64) {
+	r.pendingPreparesLock.Lock()
+	defer r.pendingPreparesLock.Unlock()
+
+	delete(r.pendingPrepares, index)
 }
 
 func (r *Runtime) errorSummary(errs map[proto.NodeID]error) error {
@@ -638,6 +802,20 @@ func (r *Runtime) goFunc(f func()) {
 		defer r.wg.Done()
 		f()
 	}()
+}
+
+/// utils
+func (r *Runtime) uint64ToBytes(i uint64) (res []byte) {
+	res = make([]byte, 8)
+	binary.BigEndian.PutUint64(res, i)
+	return
+}
+
+func (r *Runtime) bytesToUint64(b []byte) (uint64, error) {
+	if len(b) < 8 {
+		return 0, kt.ErrInvalidLog
+	}
+	return binary.BigEndian.Uint64(b), nil
 }
 
 //// future extensions, barrier, noop log placeholder etc.

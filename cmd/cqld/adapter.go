@@ -96,7 +96,7 @@ func (s *LocalStorage) Commit(req interface{}) (_ interface{}, err error) {
 	var ok bool
 
 	if kp, ok = req.(*KayakPayload); !ok || kp == nil {
-		err = errors.Wrap(kt.ErrInvalidLog, "invalid compiled log")
+		err = errors.Wrapf(kt.ErrInvalidLog, "invalid kayak payload %#v", req)
 		return
 	}
 
@@ -221,14 +221,7 @@ func (s *KayakKVServer) Init(storePath string, initNodes []proto.Node) (err erro
 			Command: CmdSet,
 			Data:    nodeBuf.Bytes(),
 		}
-
-		var cl *compiledLog
-		cl, err = s.KVStorage.compileLog(payload)
-		if err != nil {
-			log.WithError(err).Error("compile exec log failed")
-			return
-		}
-		_, err = s.KVStorage.Commit(cl)
+		_, err = s.KVStorage.Commit(payload)
 		if err != nil {
 			log.WithError(err).Error("init kayak KV commit node failed")
 			return

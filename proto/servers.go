@@ -89,7 +89,7 @@ func (p *Peers) Verify() (err error) {
 
 // Find finds the index of the server with the specified key in the server list.
 func (p *Peers) Find(key NodeID) (index int32, found bool) {
-	if p.Servers == nil {
+	if p.Servers != nil {
 		for i, s := range p.Servers {
 			if key.IsEqual(&s) {
 				index = int32(i)

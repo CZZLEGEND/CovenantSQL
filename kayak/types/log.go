@@ -56,6 +56,7 @@ func (t LogType) String() (s string) {
 // LogHeader defines the checksum header structure.
 type LogHeader struct {
 	Index      uint64       // log index
+	Version    uint64       // log version
 	Type       LogType      // log type
 	Producer   proto.NodeID // producer node
 	DataLength uint64       // data length

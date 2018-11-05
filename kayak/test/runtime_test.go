@@ -241,10 +241,12 @@ func BenchmarkNewRuntime(b *testing.B) {
 		rt1.SetCaller(node2, newFakeCaller(m, node2))
 		rt2.SetCaller(node1, newFakeCaller(m, node1))
 
-		rt1.Start()
+		err = rt1.Start()
+		So(err, ShouldBeNil)
 		defer rt1.Shutdown()
 
-		rt2.Start()
+		err = rt2.Start()
+		So(err, ShouldBeNil)
 		defer rt2.Shutdown()
 
 		q1 := &queryStructure{

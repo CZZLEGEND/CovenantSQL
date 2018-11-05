@@ -109,7 +109,7 @@ func TestDBMS(t *testing.T) {
 				err = queryRes.Verify()
 				So(err, ShouldBeNil)
 				So(queryRes.Header.RowCount, ShouldEqual, 0)
-				So(queryRes.Header.LogOffset, ShouldEqual, 1)
+				So(queryRes.Header.LogOffset, ShouldEqual, 0)
 
 				var reqGetRequest wt.GetRequestReq
 				var respGetRequest *wt.GetRequestResp
