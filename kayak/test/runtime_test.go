@@ -161,6 +161,7 @@ func newFakeService(rt *kayak.Runtime) (fs *fakeService) {
 }
 
 func (s *fakeService) Call(req *kt.RPCRequest, resp *interface{}) (err error) {
+	log.Infof("got call: %v", req)
 	return s.rt.FollowerApply(req.Log)
 }
 
@@ -232,8 +233,8 @@ func BenchmarkNewRuntime(b *testing.B) {
 		wal1 := kl.NewMemWal()
 		cfg1 := &kt.RuntimeConfig{
 			Handler:          db1,
-			PrepareThreshold: 2,
-			CommitThreshold:  2,
+			PrepareThreshold: 1.0,
+			CommitThreshold:  1.0,
 			PrepareTimeout:   time.Second,
 			CommitTimeout:    10 * time.Second,
 			Peers:            peers,
@@ -248,8 +249,8 @@ func BenchmarkNewRuntime(b *testing.B) {
 		wal2 := kl.NewMemWal()
 		cfg2 := &kt.RuntimeConfig{
 			Handler:          db2,
-			PrepareThreshold: 2,
-			CommitThreshold:  2,
+			PrepareThreshold: 1.0,
+			CommitThreshold:  1.0,
 			PrepareTimeout:   time.Second,
 			CommitTimeout:    10 * time.Second,
 			Peers:            peers,

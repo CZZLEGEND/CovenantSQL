@@ -490,7 +490,7 @@ func (r *Runtime) followerCommit(l *kt.Log) (err error) {
 		log.WithFields(log.Fields{
 			"head":     myLastCommit,
 			"supplied": lastCommit,
-		}).Warning("Invalid last commit log")
+		}).Warning("invalid last commit log")
 		err = errors.Wrap(kt.ErrInvalidLog, "invalid last commit log index")
 		return
 	} else if lastCommit > myLastCommit {
