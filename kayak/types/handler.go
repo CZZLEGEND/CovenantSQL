@@ -18,7 +18,6 @@ package types
 
 // Handler defines the main underlying fsm of kayak.
 type Handler interface {
-	Convert([]byte) (interface{}, error)
-	Check(interface{}) error
-	Commit(interface{}) (interface{}, error)
+	Check(request interface{}) error
+	Commit(request interface{}) (result interface{}, err error)
 }

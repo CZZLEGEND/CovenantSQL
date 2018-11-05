@@ -55,18 +55,15 @@ func (t LogType) String() (s string) {
 
 // LogHeader defines the checksum header structure.
 type LogHeader struct {
-	Index    uint64       // log index
-	Type     LogType      // log type
-	Producer proto.NodeID // producer node
-
-	// TODO(): consider checksum of the log body in case of corruption
+	Index      uint64       // log index
+	Type       LogType      // log type
+	Producer   proto.NodeID // producer node
+	DataLength uint64       // data length
 }
 
 // Log defines the log data structure.
 type Log struct {
 	LogHeader
-
-	// TODO(): consider sign the header hash by producer to prove log is authentic
-
-	Data []byte // log payload, encode by msgpack
+	// Data could be detected and handle decode properly by log layer
+	Data interface{}
 }
