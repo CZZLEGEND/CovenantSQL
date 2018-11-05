@@ -161,7 +161,7 @@ func newFakeService(rt *kayak.Runtime) (fs *fakeService) {
 }
 
 func (s *fakeService) Call(req *kt.RPCRequest, resp *interface{}) (err error) {
-	log.Infof("got call: %v", req)
+	log.Infof("got call: %v", req.Log)
 	return s.rt.FollowerApply(req.Log)
 }
 

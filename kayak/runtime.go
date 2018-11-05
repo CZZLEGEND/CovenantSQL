@@ -603,13 +603,16 @@ func (r *Runtime) leaderDoCommit(req *commitReq) (tracker *rpcTracker, result in
 	// not wrapping underlying handler commit error
 	result, err = r.sh.Commit(req.data)
 
-	// send commit
-	tracker = r.rpc(l, r.minCommitFollowers)
-
 	if err == nil {
 		// mark last commit
 		atomic.StoreUint64(&r.lastCommit, l.Index)
 	}
+
+	// send commit
+	commitCtx, commitCtxCancelFunc := context.WithTimeout(context.Background(), r.commitTimeout)
+	defer commitCtxCancelFunc()
+	tracker = r.rpc(l, r.minCommitFollowers)
+	_, _, _ = tracker.get(commitCtx)
 
 	// TODO(): text log for rpc errors
 
