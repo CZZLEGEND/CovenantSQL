@@ -161,7 +161,6 @@ func newFakeService(rt *kayak.Runtime) (fs *fakeService) {
 }
 
 func (s *fakeService) Call(req *kt.RPCRequest, resp *interface{}) (err error) {
-	log.Infof("got call: %v", req.Log)
 	return s.rt.FollowerApply(req.Log)
 }
 
@@ -193,7 +192,7 @@ func (c *fakeCaller) Call(method string, req interface{}, resp interface{}) (err
 
 func BenchmarkNewRuntime(b *testing.B) {
 	Convey("runtime test", b, func(c C) {
-		log.SetLevel(log.InfoLevel)
+		log.SetLevel(log.DebugLevel)
 		f, err := os.OpenFile("test.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		So(err, ShouldBeNil)
 		log.SetOutput(f)
