@@ -43,6 +43,7 @@ type rpcTracker struct {
 	// scoreboard
 	complete int
 	sent     uint32
+	doneOnce sync.Once
 	doneCh   chan struct{}
 	wg       sync.WaitGroup
 	closed   uint32
@@ -100,11 +101,15 @@ func (t *rpcTracker) callSingle(idx int) {
 }
 
 func (t *rpcTracker) done() {
-	select {
-	case <-t.doneCh:
-	default:
-		close(t.doneCh)
-	}
+	t.doneOnce.Do(func() {
+		if t.doneCh != nil {
+			select {
+			case <-t.doneCh:
+			default:
+				close(t.doneCh)
+			}
+		}
+	})
 }
 
 func (t *rpcTracker) get(ctx context.Context) (errors map[proto.NodeID]error, meets bool, finished bool) {
