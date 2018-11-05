@@ -81,7 +81,7 @@ func (p *MemWal) Read() (l *kt.Log, err error) {
 	p.RLock()
 	defer p.RUnlock()
 
-	if atomic.LoadUint64(&p.offset) > uint64(len(p.logs)) {
+	if atomic.LoadUint64(&p.offset) >= uint64(len(p.logs)) {
 		err = io.EOF
 		return
 	}
