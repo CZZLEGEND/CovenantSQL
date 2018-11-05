@@ -22,7 +22,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime/trace"
 	"strings"
 	"sync"
@@ -164,8 +163,7 @@ func NewDatabase(cfg *DBConfig, peers *proto.Peers, genesisBlock *ct.Block) (db 
 
 	// init kayak config
 	kayakWalPath := filepath.Join(cfg.DataDir, KayakWalFileName)
-	applyDataType := reflect.TypeOf((*wt.Request)(nil)).Elem()
-	if db.kayakWal, err = kl.NewLevelDBWal(kayakWalPath, applyDataType); err != nil {
+	if db.kayakWal, err = kl.NewLevelDBWal(kayakWalPath); err != nil {
 		err = errors.Wrap(err, "init kayak log pool failed")
 		return
 	}
@@ -179,6 +177,7 @@ func NewDatabase(cfg *DBConfig, peers *proto.Peers, genesisBlock *ct.Block) (db 
 		Peers:            peers,
 		Wal:              db.kayakWal,
 		NodeID:           db.nodeID,
+		InstanceID:       string(db.dbID),
 		ServiceName:      DBKayakRPCName,
 		MethodName:       DBKayakMethodName,
 	}
@@ -365,7 +364,8 @@ func (db *Database) getLog(index uint64) (data interface{}, err error) {
 		return
 	}
 
-	data = l.Data
+	// decode log
+	data, err = db.DecodePayload(l.Data)
 
 	return
 }

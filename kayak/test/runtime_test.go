@@ -17,9 +17,9 @@
 package test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -37,6 +37,7 @@ import (
 	"github.com/CovenantSQL/CovenantSQL/utils"
 	"github.com/CovenantSQL/CovenantSQL/utils/log"
 	"github.com/jordwest/mock-conn"
+	"github.com/pkg/errors"
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -68,6 +69,28 @@ type queryStructure struct {
 func newSQLiteStorage(dsn string) (s *sqliteStorage, err error) {
 	s = &sqliteStorage{}
 	s.st, err = storage.New(dsn)
+	return
+}
+
+func (s *sqliteStorage) EncodePayload(request interface{}) (data []byte, err error) {
+	var buf *bytes.Buffer
+	if buf, err = utils.EncodeMsgPack(request); err != nil {
+		err = errors.Wrap(err, "encode payload failed")
+		return
+	}
+
+	data = buf.Bytes()
+	return
+}
+
+func (s *sqliteStorage) DecodePayload(data []byte) (request interface{}, err error) {
+	var req *queryStructure
+	if err = utils.DecodeMsgPack(data, &req); err != nil {
+		err = errors.Wrap(err, "decode payload failed")
+		return
+	}
+
+	request = req
 	return
 }
 

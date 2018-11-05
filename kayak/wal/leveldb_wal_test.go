@@ -17,18 +17,19 @@
 package wal
 
 import (
+	"os"
+	"testing"
+
 	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
 	"github.com/CovenantSQL/CovenantSQL/proto"
 	. "github.com/smartystreets/goconvey/convey"
-	"os"
-	"testing"
 )
 
 func TestLevelDBWal_Write(t *testing.T) {
 	Convey("test leveldb wal write", t, func() {
 		var p *LevelDBWal
 		var err error
-		p, err = NewLevelDBWal("testWrite.ldb", nil)
+		p, err = NewLevelDBWal("testWrite.ldb")
 		So(err, ShouldBeNil)
 		defer func() {
 			p.Close()

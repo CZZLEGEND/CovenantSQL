@@ -21,7 +21,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"reflect"
 	"syscall"
 	"time"
 
@@ -208,10 +207,9 @@ func initKayakTwoPC(rootDir string, node *proto.Node, peers *proto.Peers, h kt.H
 	log.Info("create kayak config")
 
 	walPath := filepath.Join(rootDir, kayakWalFileName)
-	prepareLogType := reflect.TypeOf((*KayakPayload)(nil)).Elem()
 
 	var logWal kt.Wal
-	if logWal, err = kl.NewLevelDBWal(walPath, prepareLogType); err != nil {
+	if logWal, err = kl.NewLevelDBWal(walPath); err != nil {
 		err = errors.Wrap(err, "init kayak log pool failed")
 		return
 	}

@@ -17,11 +17,13 @@
 package worker
 
 import (
+	"sync"
+
 	"github.com/CovenantSQL/CovenantSQL/kayak"
 	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
 	"github.com/CovenantSQL/CovenantSQL/proto"
 	"github.com/CovenantSQL/CovenantSQL/rpc"
-	"sync"
+	"github.com/pkg/errors"
 )
 
 const (
@@ -59,5 +61,5 @@ func (s *DBKayakMuxService) Call(req *kt.RPCRequest, _ *interface{}) (err error)
 		return v.(*kayak.Runtime).FollowerApply(req.Log)
 	}
 
-	return ErrUnknownMuxRequest
+	return errors.Wrapf(ErrUnknownMuxRequest, "instance %v", req.Instance)
 }

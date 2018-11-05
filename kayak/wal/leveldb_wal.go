@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"reflect"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -47,7 +46,6 @@ type LevelDBWal struct {
 	db          *leveldb.DB
 	it          iterator.Iterator
 	base        uint64
-	prepareType reflect.Type
 	closed      uint32
 	readLock    sync.Mutex
 	read        uint32
@@ -56,7 +54,7 @@ type LevelDBWal struct {
 }
 
 // NewLevelDBWal returns new leveldb wal instance.
-func NewLevelDBWal(filename string, prepareType reflect.Type) (p *LevelDBWal, err error) {
+func NewLevelDBWal(filename string) (p *LevelDBWal, err error) {
 	p = &LevelDBWal{}
 	if p.db, err = leveldb.OpenFile(filename, nil); err != nil {
 		err = errors.Wrap(err, "open database failed")
@@ -71,9 +69,6 @@ func NewLevelDBWal(filename string, prepareType reflect.Type) (p *LevelDBWal, er
 	} else {
 		err = nil
 	}
-
-	// set prepare field type for decode purpose
-	p.prepareType = prepareType
 
 	return
 }
@@ -256,11 +251,6 @@ func (p *LevelDBWal) load(logHeader []byte) (l *kt.Log, err error) {
 	if encData, err = p.db.Get(dataKey, nil); err != nil {
 		err = errors.Wrap(err, "get log data failed")
 		return
-	}
-
-	if l.Type == kt.LogPrepare && p.prepareType != nil {
-		// use prepare type to instantiate prepare log data
-		l.Data = reflect.New(p.prepareType).Interface()
 	}
 
 	// load data

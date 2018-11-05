@@ -17,15 +17,44 @@
 package worker
 
 import (
+	"bytes"
 	"container/list"
 	"context"
 
 	"github.com/CovenantSQL/CovenantSQL/sqlchain/storage"
+	"github.com/CovenantSQL/CovenantSQL/utils"
 	wt "github.com/CovenantSQL/CovenantSQL/worker/types"
 	"github.com/pkg/errors"
 )
 
 // Following contains storage related logic extracted from main database instance definition.
+
+// EncodePayload implements kayak.types.Handler.EncodePayload.
+func (db *Database) EncodePayload(request interface{}) (data []byte, err error) {
+	var buf *bytes.Buffer
+
+	if buf, err = utils.EncodeMsgPack(request); err != nil {
+		err = errors.Wrap(err, "encode request failed")
+		return
+	}
+
+	data = buf.Bytes()
+	return
+}
+
+// DecodePayload implements kayak.types.Handler.DecodePayload.
+func (db *Database) DecodePayload(data []byte) (request interface{}, err error) {
+	var req *wt.Request
+
+	if err = utils.DecodeMsgPack(data, &req); err != nil {
+		err = errors.Wrap(err, "decode request failed")
+		return
+	}
+
+	request = req
+
+	return
+}
 
 // Check implements kayak.types.Handler.Check.
 func (db *Database) Check(rawReq interface{}) (err error) {

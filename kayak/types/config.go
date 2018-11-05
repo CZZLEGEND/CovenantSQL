@@ -40,6 +40,8 @@ type RuntimeConfig struct {
 	Wal Wal
 	// current node id.
 	NodeID proto.NodeID
+	// current instance id.
+	InstanceID string
 	// mux service name.
 	ServiceName string
 	// mux service method.

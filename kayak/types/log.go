@@ -66,5 +66,5 @@ type LogHeader struct {
 type Log struct {
 	LogHeader
 	// Data could be detected and handle decode properly by log layer
-	Data interface{}
+	Data []byte
 }

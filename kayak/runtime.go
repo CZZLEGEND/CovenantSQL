@@ -164,8 +164,9 @@ func NewRuntime(cfg *kt.RuntimeConfig) (rt *Runtime, err error) {
 		pendingPrepares: make(map[uint64]bool, commitWindow*2),
 
 		// handler and logs
-		sh:  cfg.Handler,
-		wal: cfg.Wal,
+		sh:         cfg.Handler,
+		wal:        cfg.Wal,
+		instanceID: cfg.InstanceID,
 
 		// peers
 		peers:                cfg.Peers,
@@ -230,7 +231,7 @@ func (r *Runtime) Shutdown() (err error) {
 }
 
 // Apply defines entry for Leader node.
-func (r *Runtime) Apply(ctx context.Context, data interface{}) (result interface{}, logIndex uint64, err error) {
+func (r *Runtime) Apply(ctx context.Context, req interface{}) (result interface{}, logIndex uint64, err error) {
 	r.peersLock.RLock()
 	defer r.peersLock.RUnlock()
 
@@ -266,15 +267,22 @@ func (r *Runtime) Apply(ctx context.Context, data interface{}) (result interface
 
 	tmStart = time.Now()
 
-	// check leader
-	if err = r.sh.Check(data); err != nil {
+	// check prepare in leader
+	if err = r.doCheck(req); err != nil {
 		err = errors.Wrap(err, "leader verify log")
+		return
+	}
+
+	// encode request
+	var encBuf []byte
+	if encBuf, err = r.sh.EncodePayload(req); err != nil {
+		err = errors.Wrap(err, "encode kayak payload failed")
 		return
 	}
 
 	// create prepare request
 	var prepareLog *kt.Log
-	if prepareLog, err = r.leaderLogPrepare(data); err != nil {
+	if prepareLog, err = r.leaderLogPrepare(encBuf); err != nil {
 		// serve error, leader could not write logs, change leader in block producer
 		// TODO(): CHANGE LEADER
 		return
@@ -397,7 +405,7 @@ func (r *Runtime) UpdatePeers(peers *proto.Peers) (err error) {
 	return
 }
 
-func (r *Runtime) leaderLogPrepare(data interface{}) (*kt.Log, error) {
+func (r *Runtime) leaderLogPrepare(data []byte) (*kt.Log, error) {
 	// just write new log
 	return r.newLog(kt.LogPrepare, data)
 }
@@ -407,9 +415,24 @@ func (r *Runtime) leaderLogRollback(i uint64) (*kt.Log, error) {
 	return r.newLog(kt.LogRollback, r.uint64ToBytes(i))
 }
 
+func (r *Runtime) doCheck(req interface{}) (err error) {
+	if err = r.sh.Check(req); err != nil {
+		err = errors.Wrap(err, "verify log")
+		return
+	}
+
+	return
+}
+
 func (r *Runtime) followerPrepare(l *kt.Log) (err error) {
-	if err = r.sh.Check(l.Data); err != nil {
-		err = errors.Wrap(err, "follower verify log")
+	// decode
+	var req interface{}
+	if req, err = r.sh.DecodePayload(l.Data); err != nil {
+		err = errors.Wrap(err, "decode kayak payload failed")
+		return
+	}
+
+	if err = r.doCheck(req); err != nil {
 		return
 	}
 
@@ -500,9 +523,19 @@ func (r *Runtime) commitResult(ctx context.Context, commitLog *kt.Log, prepareLo
 		return
 	}
 
+	// decode prepare log
+	var logReq interface{}
+	var err error
+	if logReq, err = r.sh.DecodePayload(prepareLog.Data); err != nil {
+		res <- &commitResult{
+			err: errors.Wrap(err, "decode log payload failed"),
+		}
+		return
+	}
+
 	req := &commitReq{
 		ctx:    ctx,
-		data:   prepareLog.Data,
+		data:   logReq,
 		index:  prepareLog.Index,
 		result: res,
 		log:    commitLog,
@@ -609,23 +642,16 @@ func (r *Runtime) followerDoCommit(req *commitReq) (err error) {
 
 func (r *Runtime) getPrepareLog(l *kt.Log) (lastCommitIndex uint64, pl *kt.Log, err error) {
 	var prepareIndex uint64
-	var dataBytes []byte
-	var ok bool
-
-	if dataBytes, ok = l.Data.([]byte); !ok {
-		err = errors.Wrap(kt.ErrInvalidLog, "log does not contain valid payload")
-		return
-	}
 
 	// decode prepare index
-	if prepareIndex, err = r.bytesToUint64(dataBytes); err != nil {
+	if prepareIndex, err = r.bytesToUint64(l.Data); err != nil {
 		err = errors.Wrap(err, "log does not contain valid prepare index")
 		return
 	}
 
 	// decode commit index
-	if len(dataBytes) >= 16 {
-		lastCommitIndex, _ = r.bytesToUint64(dataBytes[8:])
+	if len(l.Data) >= 16 {
+		lastCommitIndex, _ = r.bytesToUint64(l.Data[8:])
 	}
 
 	pl, err = r.wal.Get(prepareIndex)
@@ -633,7 +659,7 @@ func (r *Runtime) getPrepareLog(l *kt.Log) (lastCommitIndex uint64, pl *kt.Log, 
 	return
 }
 
-func (r *Runtime) newLog(logType kt.LogType, data interface{}) (l *kt.Log, err error) {
+func (r *Runtime) newLog(logType kt.LogType, data []byte) (l *kt.Log, err error) {
 	// allocate index
 	r.nextIndexLock.Lock()
 	i := r.nextIndex

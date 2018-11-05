@@ -84,6 +84,31 @@ func initStorage(dbFile string) (stor *LocalStorage, err error) {
 	return
 }
 
+// EncodePayload implements kayak.types.Handler.EncodePayload.
+func (s *LocalStorage) EncodePayload(request interface{}) (data []byte, err error) {
+	var buf *bytes.Buffer
+	if buf, err = utils.EncodeMsgPack(request); err != nil {
+		err = errors.Wrap(err, "encode kayak payload failed")
+		return
+	}
+
+	data = buf.Bytes()
+	return
+}
+
+// DecodePayload implements kayak.types.Handler.DecodePayload.
+func (s *LocalStorage) DecodePayload(data []byte) (request interface{}, err error) {
+	var kp *KayakPayload
+
+	if err = utils.DecodeMsgPack(data, &kp); err != nil {
+		err = errors.Wrap(err, "decode kayak payload failed")
+		return
+	}
+
+	request = kp
+	return
+}
+
 // Check implements kayak.types.Handler.Check.
 func (s *LocalStorage) Check(req interface{}) (err error) {
 	return nil
