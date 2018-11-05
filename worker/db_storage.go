@@ -21,21 +21,11 @@ import (
 	"context"
 
 	"github.com/CovenantSQL/CovenantSQL/sqlchain/storage"
-	"github.com/CovenantSQL/CovenantSQL/utils"
 	wt "github.com/CovenantSQL/CovenantSQL/worker/types"
 	"github.com/pkg/errors"
 )
 
 // Following contains storage related logic extracted from main database instance definition.
-
-// Convert implements kayak.types.Handler.Convert.
-func (db *Database) Convert(data []byte) (rawReq interface{}, err error) {
-	// decode
-	var req wt.Request
-	err = utils.DecodeMsgPack(data, &req)
-	rawReq = req
-	return
-}
 
 // Check implements kayak.types.Handler.Check.
 func (db *Database) Check(rawReq interface{}) (err error) {

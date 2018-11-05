@@ -24,8 +24,8 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-func TestMemPool_Write(t *testing.T) {
-	Convey("test mem pool write", t, func() {
+func TestMemWal_Write(t *testing.T) {
+	Convey("test mem wal write", t, func() {
 		var p *MemWal
 		p = NewMemWal()
 
@@ -46,8 +46,6 @@ func TestMemPool_Write(t *testing.T) {
 		So(p.revIndex, ShouldHaveLength, 1)
 		So(p.revIndex[l1.Index], ShouldEqual, 0)
 		So(p.offset, ShouldEqual, 1)
-		So(p.pending, ShouldBeEmpty)
-		So(p.nextToCommit, ShouldEqual, 1)
 
 		// test get
 		var l *kt.Log
@@ -68,8 +66,6 @@ func TestMemPool_Write(t *testing.T) {
 		So(p.revIndex, ShouldHaveLength, 2)
 		So(p.revIndex[l2.Index], ShouldEqual, 1)
 		So(p.offset, ShouldEqual, 2)
-		So(p.pending, ShouldBeEmpty)
-		So(p.nextToCommit, ShouldEqual, 2)
 
 		// test not consecutive writes
 		l4 := &kt.Log{
@@ -84,9 +80,6 @@ func TestMemPool_Write(t *testing.T) {
 		So(p.revIndex, ShouldHaveLength, 3)
 		So(p.revIndex[l4.Index], ShouldEqual, 2)
 		So(p.offset, ShouldEqual, 3)
-		So(p.pending, ShouldHaveLength, 1)
-		So(p.pending[0], ShouldEqual, 3)
-		So(p.nextToCommit, ShouldEqual, 2)
 
 		l3 := &kt.Log{
 			LogHeader: kt.LogHeader{
@@ -100,44 +93,11 @@ func TestMemPool_Write(t *testing.T) {
 		So(p.revIndex, ShouldHaveLength, 4)
 		So(p.revIndex[l3.Index], ShouldEqual, 3)
 		So(p.offset, ShouldEqual, 4)
-		So(p.pending, ShouldBeEmpty)
-		So(p.nextToCommit, ShouldEqual, 4)
-
-		// test truncate
-		err = p.Truncate()
-		So(err, ShouldBeNil)
-		So(p.revIndex, ShouldBeEmpty)
-		So(p.offset, ShouldEqual, 0)
-		So(p.pending, ShouldBeEmpty)
-		So(p.nextToCommit, ShouldEqual, 4)
-		So(p.base, ShouldEqual, 4)
-
-		// write after truncate
-		err = p.Write(l1)
-		So(err, ShouldNotBeNil)
-		So(p.revIndex, ShouldBeEmpty)
-
-		// write new log
-		l5 := &kt.Log{
-			LogHeader: kt.LogHeader{
-				Index: 4,
-				Type:  kt.LogPrepare,
-			},
-			Data: []byte("happy5"),
-		}
-		err = p.Write(l5)
-		So(err, ShouldBeNil)
-		So(p.revIndex, ShouldHaveLength, 1)
-		So(p.revIndex[l5.Index], ShouldEqual, 0)
-		So(p.offset, ShouldEqual, 1)
-		So(p.pending, ShouldBeEmpty)
-		So(p.nextToCommit, ShouldEqual, 5)
-		So(p.base, ShouldEqual, 4)
 	})
 }
 
-func TestMemPool_Write2(t *testing.T) {
-	Convey("test mem pool write", t, func() {
+func TestMemWal_Write2(t *testing.T) {
+	Convey("test mem wal write", t, func() {
 		l1 := &kt.Log{
 			LogHeader: kt.LogHeader{
 				Index: 0,
@@ -208,8 +168,5 @@ func TestMemPool_Write2(t *testing.T) {
 
 		So(p.revIndex, ShouldHaveLength, 5)
 		So(p.offset, ShouldEqual, 5)
-		So(p.pending, ShouldBeEmpty)
-		So(p.nextToCommit, ShouldEqual, 5)
-		So(p.base, ShouldEqual, 0)
 	})
 }

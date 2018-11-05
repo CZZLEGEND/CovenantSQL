@@ -17,17 +17,14 @@
 package types
 
 import (
-	"database/sql"
 	"time"
 
 	"github.com/CovenantSQL/CovenantSQL/crypto/asymmetric"
 	"github.com/CovenantSQL/CovenantSQL/crypto/hash"
 	"github.com/CovenantSQL/CovenantSQL/proto"
-	hsp "github.com/CovenantSQL/HashStablePack/marshalhash"
 )
 
 //go:generate hsp
-//hsp:ignore Query
 
 // QueryType enumerates available query type, currently read/write.
 type QueryType int32
@@ -39,10 +36,16 @@ const (
 	WriteQuery
 )
 
+// NamedArg defines the named argument structure for database.
+type NamedArg struct {
+	Name  string
+	Value interface{}
+}
+
 // Query defines single query.
 type Query struct {
 	Pattern string
-	Args    []sql.NamedArg
+	Args    []NamedArg
 }
 
 // RequestPayload defines a queries payload.
@@ -93,35 +96,6 @@ func (t QueryType) String() string {
 	default:
 		return "unknown"
 	}
-}
-
-// MarshalHash defines marshal hash for Query type.
-func (q *Query) MarshalHash() (o []byte, err error) {
-	// Refactored from original hsp generated code
-	var b []byte
-	o = hsp.Require(b, q.Msgsize())
-	// map header, size 2
-	o = append(o, 0x82, 0x82)
-	o = hsp.AppendArrayHeader(o, uint32(len(q.Args)))
-	for i := range q.Args {
-		if o, err = hsp.AppendIntf(o, q.Args[i]); err != nil {
-			return nil, err
-		}
-	}
-	o = append(o, 0x82)
-	o = hsp.AppendString(o, q.Pattern)
-	return
-}
-
-// Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message.
-func (q *Query) Msgsize() (s int) {
-	// Refactored from original hsp generated code
-	s = 1 + 5 + hsp.ArrayHeaderSize
-	for i := range q.Args {
-		s += hsp.GuessSize(q.Args[i])
-	}
-	s += 8 + hsp.StringPrefixSize + len(q.Pattern)
-	return
 }
 
 // Verify checks hash and signature in request header.

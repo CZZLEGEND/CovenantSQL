@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"syscall"
 	"time"
 
@@ -42,9 +43,9 @@ import (
 )
 
 const (
-	kayakServiceName  = "Kayak"
-	kayakMethodName   = "Call"
-	kayakFilePoolName = "kayak.db"
+	kayakServiceName = "Kayak"
+	kayakMethodName  = "Call"
+	kayakWalFileName = "kayak.ldb"
 )
 
 func runNode(nodeID proto.NodeID, listenAddr string) (err error) {
@@ -70,7 +71,7 @@ func runNode(nodeID proto.NodeID, listenAddr string) (err error) {
 	}
 
 	// init nodes
-	log.Info("init peers")
+	log.WithField("node", nodeID).Info("init peers")
 	_, peers, thisNode, err := initNodePeers(nodeID, conf.GConf.PubKeyStoreFile)
 	if err != nil {
 		log.WithError(err).Error("init nodes and peers failed")
@@ -80,7 +81,7 @@ func runNode(nodeID proto.NodeID, listenAddr string) (err error) {
 	var server *rpc.Server
 
 	// create server
-	log.Info("create server")
+	log.WithField("addr", listenAddr).Info("create server")
 	if server, err = createServer(
 		conf.GConf.PrivateKeyFile, conf.GConf.PubKeyStoreFile, masterKey, listenAddr); err != nil {
 		log.WithError(err).Error("create server failed")
@@ -206,8 +207,11 @@ func initKayakTwoPC(rootDir string, node *proto.Node, peers *proto.Peers, h kt.H
 	// create kayak config
 	log.Info("create kayak config")
 
-	var logPool kt.Wal
-	if logPool, err = kl.NewLevelDBWal(filepath.Join(rootDir, kayakFilePoolName)); err != nil {
+	walPath := filepath.Join(rootDir, kayakWalFileName)
+	prepareLogType := reflect.TypeOf((*KayakPayload)(nil)).Elem()
+
+	var logWal kt.Wal
+	if logWal, err = kl.NewLevelDBWal(walPath, prepareLogType); err != nil {
 		err = errors.Wrap(err, "init kayak log pool failed")
 		return
 	}
@@ -219,7 +223,7 @@ func initKayakTwoPC(rootDir string, node *proto.Node, peers *proto.Peers, h kt.H
 		PrepareTimeout:   time.Second,
 		CommitTimeout:    time.Second * 60,
 		Peers:            peers,
-		Pool:             logPool,
+		Wal:              logWal,
 		NodeID:           node.ID,
 		ServiceName:      kayakServiceName,
 		MethodName:       kayakMethodName,

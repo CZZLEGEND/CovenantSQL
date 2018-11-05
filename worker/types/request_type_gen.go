@@ -7,6 +7,59 @@ import (
 )
 
 // MarshalHash marshals for hash
+func (z NamedArg) MarshalHash() (o []byte, err error) {
+	var b []byte
+	o = hsp.Require(b, z.Msgsize())
+	// map header, size 2
+	o = append(o, 0x82, 0x82)
+	o, err = hsp.AppendIntf(o, z.Value)
+	if err != nil {
+		return
+	}
+	o = append(o, 0x82)
+	o = hsp.AppendString(o, z.Name)
+	return
+}
+
+// Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
+func (z NamedArg) Msgsize() (s int) {
+	s = 1 + 6 + hsp.GuessSize(z.Value) + 5 + hsp.StringPrefixSize + len(z.Name)
+	return
+}
+
+// MarshalHash marshals for hash
+func (z *Query) MarshalHash() (o []byte, err error) {
+	var b []byte
+	o = hsp.Require(b, z.Msgsize())
+	// map header, size 2
+	o = append(o, 0x82, 0x82)
+	o = hsp.AppendArrayHeader(o, uint32(len(z.Args)))
+	for za0001 := range z.Args {
+		// map header, size 2
+		o = append(o, 0x82, 0x82)
+		o = hsp.AppendString(o, z.Args[za0001].Name)
+		o = append(o, 0x82)
+		o, err = hsp.AppendIntf(o, z.Args[za0001].Value)
+		if err != nil {
+			return
+		}
+	}
+	o = append(o, 0x82)
+	o = hsp.AppendString(o, z.Pattern)
+	return
+}
+
+// Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
+func (z *Query) Msgsize() (s int) {
+	s = 1 + 5 + hsp.ArrayHeaderSize
+	for za0001 := range z.Args {
+		s += 1 + 5 + hsp.StringPrefixSize + len(z.Args[za0001].Name) + 6 + hsp.GuessSize(z.Args[za0001].Value)
+	}
+	s += 8 + hsp.StringPrefixSize + len(z.Pattern)
+	return
+}
+
+// MarshalHash marshals for hash
 func (z *QueryKey) MarshalHash() (o []byte, err error) {
 	var b []byte
 	o = hsp.Require(b, z.Msgsize())
@@ -53,10 +106,20 @@ func (z *Request) MarshalHash() (o []byte, err error) {
 	o = append(o, 0x83, 0x83, 0x81, 0x81)
 	o = hsp.AppendArrayHeader(o, uint32(len(z.Payload.Queries)))
 	for za0001 := range z.Payload.Queries {
-		if oTemp, err := z.Payload.Queries[za0001].MarshalHash(); err != nil {
-			return nil, err
-		} else {
-			o = hsp.AppendBytes(o, oTemp)
+		// map header, size 2
+		o = append(o, 0x82, 0x82)
+		o = hsp.AppendString(o, z.Payload.Queries[za0001].Pattern)
+		o = append(o, 0x82)
+		o = hsp.AppendArrayHeader(o, uint32(len(z.Payload.Queries[za0001].Args)))
+		for za0002 := range z.Payload.Queries[za0001].Args {
+			// map header, size 2
+			o = append(o, 0x82, 0x82)
+			o = hsp.AppendString(o, z.Payload.Queries[za0001].Args[za0002].Name)
+			o = append(o, 0x82)
+			o, err = hsp.AppendIntf(o, z.Payload.Queries[za0001].Args[za0002].Value)
+			if err != nil {
+				return
+			}
 		}
 	}
 	o = append(o, 0x83)
@@ -78,7 +141,10 @@ func (z *Request) MarshalHash() (o []byte, err error) {
 func (z *Request) Msgsize() (s int) {
 	s = 1 + 8 + 1 + 8 + hsp.ArrayHeaderSize
 	for za0001 := range z.Payload.Queries {
-		s += z.Payload.Queries[za0001].Msgsize()
+		s += 1 + 8 + hsp.StringPrefixSize + len(z.Payload.Queries[za0001].Pattern) + 5 + hsp.ArrayHeaderSize
+		for za0002 := range z.Payload.Queries[za0001].Args {
+			s += 1 + 5 + hsp.StringPrefixSize + len(z.Payload.Queries[za0001].Args[za0002].Name) + 6 + hsp.GuessSize(z.Payload.Queries[za0001].Args[za0002].Value)
+		}
 	}
 	s += 7 + z.Header.Msgsize() + 9 + z.Envelope.Msgsize()
 	return

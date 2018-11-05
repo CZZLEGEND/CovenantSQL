@@ -36,8 +36,8 @@ type RuntimeConfig struct {
 	CommitTimeout time.Duration
 	// init peers of node.
 	Peers *proto.Peers
-	// log pool for kayak.
-	Pool Wal
+	// wal for kayak.
+	Wal Wal
 	// current node id.
 	NodeID proto.NodeID
 	// mux service name.

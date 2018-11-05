@@ -17,7 +17,6 @@
 package test
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -69,25 +68,6 @@ type queryStructure struct {
 func newSQLiteStorage(dsn string) (s *sqliteStorage, err error) {
 	s = &sqliteStorage{}
 	s.st, err = storage.New(dsn)
-	return
-}
-
-func (s *sqliteStorage) Encode(queries []storage.Query) (b []byte, err error) {
-	data := &queryStructure{
-		Queries: queries,
-	}
-
-	var enc *bytes.Buffer
-	if enc, err = utils.EncodeMsgPack(data); err == nil {
-		b = enc.Bytes()
-	}
-
-	return
-}
-
-func (s *sqliteStorage) Convert(dec []byte) (data interface{}, err error) {
-	data = &queryStructure{}
-	err = utils.DecodeMsgPack(dec, data)
 	return
 }
 
@@ -220,7 +200,7 @@ func BenchmarkNewRuntime(b *testing.B) {
 			},
 		}
 
-		pool1 := kl.NewMemWal()
+		wal1 := kl.NewMemWal()
 		cfg1 := &kt.RuntimeConfig{
 			Handler:          db1,
 			PrepareThreshold: 2,
@@ -228,7 +208,7 @@ func BenchmarkNewRuntime(b *testing.B) {
 			PrepareTimeout:   time.Second,
 			CommitTimeout:    10 * time.Second,
 			Peers:            peers,
-			Pool:             pool1,
+			Wal:              wal1,
 			NodeID:           node1,
 			ServiceName:      "Test",
 			MethodName:       "Call",
@@ -236,7 +216,7 @@ func BenchmarkNewRuntime(b *testing.B) {
 		rt1, err := kayak.NewRuntime(cfg1)
 		So(err, ShouldBeNil)
 
-		pool2 := kl.NewMemWal()
+		wal2 := kl.NewMemWal()
 		cfg2 := &kt.RuntimeConfig{
 			Handler:          db2,
 			PrepareThreshold: 2,
@@ -244,7 +224,7 @@ func BenchmarkNewRuntime(b *testing.B) {
 			PrepareTimeout:   time.Second,
 			CommitTimeout:    10 * time.Second,
 			Peers:            peers,
-			Pool:             pool2,
+			Wal:              wal2,
 			NodeID:           node2,
 			ServiceName:      "Test",
 			MethodName:       "Call",
@@ -267,17 +247,21 @@ func BenchmarkNewRuntime(b *testing.B) {
 		rt2.Start()
 		defer rt2.Shutdown()
 
-		q1, err := db1.Encode([]storage.Query{
-			{Pattern: "CREATE TABLE IF NOT EXISTS test (test string)"},
-		})
+		q1 := &queryStructure{
+			Queries: []storage.Query{
+				{Pattern: "CREATE TABLE IF NOT EXISTS test (test string)"},
+			},
+		}
 		So(err, ShouldBeNil)
 
-		q2, err := db1.Encode([]storage.Query{
-			{
-				Pattern: "INSERT INTO test (test) VALUES(?)",
-				Args:    []sql.NamedArg{sql.Named("", RandStringRunes(1024))},
+		q2 := &queryStructure{
+			Queries: []storage.Query{
+				{
+					Pattern: "INSERT INTO test (test) VALUES(?)",
+					Args:    []sql.NamedArg{sql.Named("", RandStringRunes(1024))},
+				},
 			},
-		})
+		}
 
 		rt1.Apply(context.Background(), q1)
 		rt2.Apply(context.Background(), q2)
@@ -294,12 +278,14 @@ func BenchmarkNewRuntime(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
 				atomic.AddUint64(&count, 1)
-				q, err := db1.Encode([]storage.Query{
-					{
-						Pattern: "INSERT INTO test (test) VALUES(?)",
-						Args:    []sql.NamedArg{sql.Named("", RandStringRunes(1024))},
+				q := &queryStructure{
+					Queries: []storage.Query{
+						{
+							Pattern: "INSERT INTO test (test) VALUES(?)",
+							Args:    []sql.NamedArg{sql.Named("", RandStringRunes(1024))},
+						},
 					},
-				})
+				}
 				_ = err
 				//c.So(err, ShouldBeNil)
 

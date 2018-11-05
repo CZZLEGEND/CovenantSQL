@@ -19,6 +19,8 @@ package wal
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
+	"reflect"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -27,49 +29,51 @@ import (
 	"github.com/CovenantSQL/CovenantSQL/utils"
 	"github.com/pkg/errors"
 	"github.com/syndtr/goleveldb/leveldb"
-	lu "github.com/syndtr/goleveldb/leveldb/util"
+	"github.com/syndtr/goleveldb/leveldb/iterator"
+	"github.com/syndtr/goleveldb/leveldb/util"
 )
 
 var (
-	// logKeyPrefix defines the leveldb log file log key prefix.
-	logKeyPrefix = []byte{'L', '_'}
+	// logHeaderKeyPrefix defines the leveldb header key prefix.
+	logHeaderKeyPrefix = []byte{'L', 'H'}
+	// logDataKeyPrefix defines the leveldb data key prefix.
+	logDataKeyPrefix = []byte{'L', 'D'}
+	// baseIndexKey defines the base index key.
 	baseIndexKey = []byte{'B', 'I'}
 )
 
-// LevelDBWal defines a pool using leveldb as storage.
+// LevelDBWal defines a toy wal using leveldb as storage.
 type LevelDBWal struct {
-	db     *leveldb.DB
-	closed uint32
-
-	// index offsets
-	baseLock    sync.RWMutex
+	db          *leveldb.DB
+	it          iterator.Iterator
 	base        uint64
-	offset      uint64
-	pendingLock sync.Mutex
+	prepareType reflect.Type
+	closed      uint32
+	readLock    sync.Mutex
+	read        uint32
 	pending     []uint64
+	pendingLock sync.Mutex
 }
 
-// NewLevelDBWal returns new leveldb pool instance.
-func NewLevelDBWal(filename string) (p *LevelDBWal, err error) {
+// NewLevelDBWal returns new leveldb wal instance.
+func NewLevelDBWal(filename string, prepareType reflect.Type) (p *LevelDBWal, err error) {
 	p = &LevelDBWal{}
 	if p.db, err = leveldb.OpenFile(filename, nil); err != nil {
 		err = errors.Wrap(err, "open database failed")
+		return
 	}
 
 	// load current base
 	var baseValue []byte
-	if baseValue, err = p.db.Get(baseIndexKey, nil); err != nil && err != leveldb.ErrNotFound {
-		err = errors.Wrap(err, "load pool base index failed")
-		return
-	}
-
-	if err == nil {
+	if baseValue, err = p.db.Get(baseIndexKey, nil); err == nil {
 		// decode base
 		p.base = p.bytesToUint64(baseValue)
+	} else {
+		err = nil
 	}
 
-	// loading pending logs
-	// TODO():
+	// set prepare field type for decode purpose
+	p.prepareType = prepareType
 
 	return
 }
@@ -77,7 +81,7 @@ func NewLevelDBWal(filename string) (p *LevelDBWal, err error) {
 // Write implements Wal.Write.
 func (p *LevelDBWal) Write(l *kt.Log) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
-		err = ErrPoolClosed
+		err = ErrWalClosed
 		return
 	}
 
@@ -86,130 +90,90 @@ func (p *LevelDBWal) Write(l *kt.Log) (err error) {
 		return
 	}
 
-	p.baseLock.RLock()
-	defer p.baseLock.RUnlock()
-
-	if l.Index < p.base+atomic.LoadUint64(&p.offset) {
+	if l.Index < p.base {
 		// already exists
 		err = ErrAlreadyExists
 		return
 	}
 
-	// build key
-	key := append(append([]byte(nil), logKeyPrefix...), p.uint64ToBytes(l.Index)...)
+	// build header headerKey
+	headerKey := append(append([]byte(nil), logHeaderKeyPrefix...), p.uint64ToBytes(l.Index)...)
 
-	// encode
+	if _, err = p.db.Get(headerKey, nil); err != nil && err != leveldb.ErrNotFound {
+		err = errors.Wrap(err, "access leveldb failed")
+		return
+	} else if err == nil {
+		err = ErrAlreadyExists
+		return
+	}
+
+	dataKey := append(append([]byte(nil), logDataKeyPrefix...), p.uint64ToBytes(l.Index)...)
+
+	// write data first
 	var enc *bytes.Buffer
-	if enc, err = utils.EncodeMsgPack(l); err != nil {
+	if enc, err = utils.EncodeMsgPack(l.Data); err != nil {
+		err = errors.Wrap(err, "encode log data failed")
 		return
 	}
 
-	// save
-	if err = p.db.Put(key, enc.Bytes(), nil); err != nil {
+	if err = p.db.Put(dataKey, enc.Bytes(), nil); err != nil {
+		err = errors.Wrap(err, "write log data failed")
 		return
 	}
 
-	// update offset
-	if atomic.CompareAndSwapUint64(&p.offset, l.Index-p.base, l.Index-p.base+1) {
-		// process pending
-		p.pendingLock.Lock()
-		defer p.pendingLock.Unlock()
+	// write header
+	l.DataLength = uint64(enc.Len())
 
-		for len(p.pending) > 0 {
-			offset := p.pending[0] - p.base
-			if !atomic.CompareAndSwapUint64(&p.offset, offset, offset+1) {
-				break
-			}
-			p.pending = p.pending[1:]
-		}
-	} else {
-		p.pendingLock.Lock()
-		defer p.pendingLock.Unlock()
-
-		i := sort.Search(len(p.pending), func(i int) bool {
-			return p.pending[i] >= l.Index
-		})
-
-		if len(p.pending) == 1 || p.pending[i] != l.Index {
-			p.pending = append(p.pending, 0)
-			copy(p.pending[i+1:], p.pending[i:])
-			p.pending[i] = l.Index
-		}
+	if enc, err = utils.EncodeMsgPack(l.LogHeader); err != nil {
+		err = errors.Wrap(err, "encode log header failed")
+		return
 	}
+
+	// save header
+	if err = p.db.Put(headerKey, enc.Bytes(), nil); err != nil {
+		err = errors.Wrap(err, "encode log header failed")
+		return
+	}
+
+	p.updatePending(l.Index)
 
 	return
 }
 
 // Read implements Wal.Read.
 func (p *LevelDBWal) Read() (l *kt.Log, err error) {
-	if atomic.LoadUint32(&p.closed) == 1 {
-		err = ErrPoolClosed
+	if atomic.LoadUint32(&p.read) == 1 {
+		err = io.EOF
 		return
 	}
 
-	var enc []byte
-	if enc, err = func() ([]byte, error) {
-		p.baseLock.RLock()
-		defer p.baseLock.RUnlock()
+	p.readLock.Lock()
+	defer p.readLock.Unlock()
 
-		offset := atomic.AddUint64(&p.offset, 1)
-
-		// build key
-		key := append(append([]byte(nil), logKeyPrefix...), p.uint64ToBytes(p.base+offset-1)...)
-
-		// read
-		return p.db.Get(key, nil)
-	}(); err != nil {
-		err = errors.Wrap(err, "read log from database failed")
-		return
+	// start with base, use iterator to read
+	if p.it == nil {
+		keyRange := util.BytesPrefix(logHeaderKeyPrefix)
+		p.it = p.db.NewIterator(keyRange, nil)
 	}
 
-	// decode
-	err = utils.DecodeMsgPack(enc, &l)
-
-	return
-}
-
-// Seek implements Wal.Seek.
-func (p *LevelDBWal) Seek(offset uint64) (err error) {
-	if atomic.LoadUint32(&p.closed) == 1 {
-		err = ErrPoolClosed
-		return
-	}
-
-	atomic.StoreUint64(&p.offset, offset)
-	return
-}
-
-// Truncate implements Wal.Truncate.
-func (p *LevelDBWal) Truncate() (err error) {
-	if atomic.LoadUint32(&p.closed) == 1 {
-		err = ErrPoolClosed
-		return
-	}
-
-	p.baseLock.Lock()
-	defer p.baseLock.Unlock()
-
-	// delete range
-	startKey := append(append([]byte(nil), logKeyPrefix...), p.uint64ToBytes(p.base)...)
-	endKey := append(append([]byte(nil), logKeyPrefix...), p.uint64ToBytes(p.offset)...)
-
-	it := p.db.NewIterator(&lu.Range{Start: startKey, Limit: endKey}, nil)
-	defer it.Release()
-
-	for it.Next() {
-		if err = p.db.Delete(it.Key(), nil); err != nil {
-			return
+	if p.it.Next() {
+		// load
+		l, err = p.load(p.it.Value())
+		// update base and pending
+		if err == nil {
+			p.updatePending(l.Index)
 		}
-	}
-
-	if err = it.Error(); err != nil {
 		return
 	}
 
-	// set pointer
-	p.base = atomic.SwapUint64(&p.offset, 0)
+	p.it.Release()
+	if err = p.it.Error(); err == nil {
+		err = io.EOF
+	}
+	p.it = nil
+
+	// log read complete, could not read again
+	atomic.StoreUint32(&p.read, 1)
 
 	return
 }
@@ -217,34 +181,21 @@ func (p *LevelDBWal) Truncate() (err error) {
 // Get implements Wal.Get.
 func (p *LevelDBWal) Get(i uint64) (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
-		err = ErrPoolClosed
+		err = ErrWalClosed
 		return
 	}
 
-	var enc []byte
-	if enc, err = func() (e []byte, err error) {
-		p.baseLock.RLock()
-		defer p.baseLock.RUnlock()
+	headerKey := append(append([]byte(nil), logHeaderKeyPrefix...), p.uint64ToBytes(i)...)
 
-		if i < p.base {
-			err = ErrTruncated
-			return
-		}
-
-		key := append(append([]byte(nil), logKeyPrefix...), p.uint64ToBytes(i)...)
-
-		return p.db.Get(key, nil)
-	}(); err == ErrTruncated {
-		return
+	var headerData []byte
+	if headerData, err = p.db.Get(headerKey, nil); err == leveldb.ErrNotFound {
+		err = ErrNotExists
 	} else if err != nil {
-		err = errors.Wrap(err, "read log from database failed")
+		err = errors.Wrap(err, "get log header failed")
 		return
 	}
 
-	// decode
-	err = utils.DecodeMsgPack(enc, &l)
-
-	return
+	return p.load(headerData)
 }
 
 // Close implements Wal.Close.
@@ -253,9 +204,71 @@ func (p *LevelDBWal) Close() {
 		return
 	}
 
+	if p.it != nil {
+		p.it.Release()
+		p.it = nil
+	}
+
 	if p.db != nil {
 		p.db.Close()
 	}
+}
+
+func (p *LevelDBWal) updatePending(index uint64) {
+	p.pendingLock.Lock()
+	defer p.pendingLock.Unlock()
+
+	if atomic.CompareAndSwapUint64(&p.base, index, index+1) {
+		// process pending
+		for len(p.pending) > 0 {
+			if !atomic.CompareAndSwapUint64(&p.base, p.pending[0], p.pending[0]+1) {
+				break
+			}
+			p.pending = p.pending[1:]
+		}
+
+		// commit base index to database
+		_ = p.db.Put(baseIndexKey, p.uint64ToBytes(atomic.LoadUint64(&p.base)), nil)
+	} else {
+		i := sort.Search(len(p.pending), func(i int) bool {
+			return p.pending[i] >= index
+		})
+
+		if len(p.pending) == i || p.pending[i] != index {
+			p.pending = append(p.pending, 0)
+			copy(p.pending[i+1:], p.pending[i:])
+			p.pending[i] = index
+		}
+	}
+}
+
+func (p *LevelDBWal) load(logHeader []byte) (l *kt.Log, err error) {
+	l = new(kt.Log)
+
+	if err = utils.DecodeMsgPack(logHeader, &l.LogHeader); err != nil {
+		err = errors.Wrap(err, "decode log header failed")
+		return
+	}
+
+	dataKey := append(append([]byte(nil), logDataKeyPrefix...), p.uint64ToBytes(l.Index)...)
+
+	var encData []byte
+	if encData, err = p.db.Get(dataKey, nil); err != nil {
+		err = errors.Wrap(err, "get log data failed")
+		return
+	}
+
+	if l.Type == kt.LogPrepare && p.prepareType != nil {
+		// use prepare type to instantiate prepare log data
+		l.Data = reflect.New(p.prepareType).Interface()
+	}
+
+	// load data
+	if err = utils.DecodeMsgPack(encData, &l.Data); err != nil {
+		err = errors.Wrap(err, "decode log data failed")
+	}
+
+	return
 }
 
 func (p *LevelDBWal) uint64ToBytes(o uint64) (res []byte) {

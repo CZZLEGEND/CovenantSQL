@@ -387,10 +387,11 @@ func convertQuery(query string, args []driver.NamedValue) (sq *wt.Query) {
 		Pattern: query,
 	}
 
-	sq.Args = make([]sql.NamedArg, len(args))
+	sq.Args = make([]wt.NamedArg, len(args))
 
 	for i, v := range args {
-		sq.Args[i] = sql.Named(v.Name, v.Value)
+		sq.Args[i].Name = v.Name
+		sq.Args[i].Value = v.Value
 	}
 
 	return

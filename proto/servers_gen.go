@@ -68,14 +68,14 @@ func (z *Peers) Msgsize() (s int) {
 func (z *PeersHeader) MarshalHash() (o []byte, err error) {
 	var b []byte
 	o = hsp.Require(b, z.Msgsize())
-	// map header, size 3
-	o = append(o, 0x83, 0x83)
+	// map header, size 4
+	o = append(o, 0x84, 0x84)
 	if oTemp, err := z.Leader.MarshalHash(); err != nil {
 		return nil, err
 	} else {
 		o = hsp.AppendBytes(o, oTemp)
 	}
-	o = append(o, 0x83)
+	o = append(o, 0x84)
 	o = hsp.AppendArrayHeader(o, uint32(len(z.Servers)))
 	for za0001 := range z.Servers {
 		if oTemp, err := z.Servers[za0001].MarshalHash(); err != nil {
@@ -84,8 +84,10 @@ func (z *PeersHeader) MarshalHash() (o []byte, err error) {
 			o = hsp.AppendBytes(o, oTemp)
 		}
 	}
-	o = append(o, 0x83)
+	o = append(o, 0x84)
 	o = hsp.AppendUint64(o, z.Version)
+	o = append(o, 0x84)
+	o = hsp.AppendUint64(o, z.Term)
 	return
 }
 
@@ -95,6 +97,6 @@ func (z *PeersHeader) Msgsize() (s int) {
 	for za0001 := range z.Servers {
 		s += z.Servers[za0001].Msgsize()
 	}
-	s += 8 + hsp.Uint64Size
+	s += 8 + hsp.Uint64Size + 5 + hsp.Uint64Size
 	return
 }

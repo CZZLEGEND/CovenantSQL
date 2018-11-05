@@ -62,7 +62,7 @@ func initNodePeers(nodeID proto.NodeID, publicKeystorePath string) (nodes *[]pro
 
 	// set p route and public keystore
 	if conf.GConf.KnownNodes != nil {
-		for _, p := range conf.GConf.KnownNodes {
+		for i, p := range conf.GConf.KnownNodes {
 			rawNodeIDHash, err := hash.NewHashFromStr(string(p.ID))
 			if err != nil {
 				log.WithError(err).Error("load hash from node id failed")
@@ -87,7 +87,7 @@ func initNodePeers(nodeID proto.NodeID, publicKeystorePath string) (nodes *[]pro
 			}
 			if p.ID == nodeID {
 				kms.SetLocalNodeIDNonce(rawNodeID.CloneBytes(), &p.Nonce)
-				thisNode = &p
+				thisNode = &conf.GConf.KnownNodes[i]
 			}
 		}
 	}

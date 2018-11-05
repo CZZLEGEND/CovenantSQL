@@ -84,23 +84,6 @@ func initStorage(dbFile string) (stor *LocalStorage, err error) {
 	return
 }
 
-// Convert implements kayak.types.Handler.Convert.
-func (s *LocalStorage) Convert(data []byte) (req interface{}, err error) {
-	var payload *KayakPayload
-
-	if err = utils.DecodeMsgPack(data, &payload); err != nil || payload == nil {
-		err = errors.Wrap(err, "unmarshal payload failed")
-		return
-	}
-
-	if req, err = s.compileLog(payload); err != nil {
-		err = errors.Wrap(err, "compile log failed")
-		return
-	}
-
-	return
-}
-
 // Check implements kayak.types.Handler.Check.
 func (s *LocalStorage) Check(req interface{}) (err error) {
 	return nil
@@ -108,11 +91,17 @@ func (s *LocalStorage) Check(req interface{}) (err error) {
 
 // Commit implements kayak.types.Handler.Commit.
 func (s *LocalStorage) Commit(req interface{}) (_ interface{}, err error) {
+	var kp *KayakPayload
 	var cl *compiledLog
 	var ok bool
 
-	if cl, ok = req.(*compiledLog); !ok || cl == nil {
+	if kp, ok = req.(*KayakPayload); !ok || kp == nil {
 		err = errors.Wrap(kt.ErrInvalidLog, "invalid compiled log")
+		return
+	}
+
+	if cl, err = s.compileLog(kp); err != nil {
+		err = errors.Wrap(err, "compile log failed")
 		return
 	}
 
@@ -266,15 +255,9 @@ func (s *KayakKVServer) SetNode(node *proto.Node) (err error) {
 		Data:    nodeBuf.Bytes(),
 	}
 
-	writeData, err := utils.EncodeMsgPack(payload)
+	_, _, err = s.Runtime.Apply(context.Background(), payload)
 	if err != nil {
-		log.WithError(err).Error("marshal payload failed")
-		return err
-	}
-
-	_, _, err = s.Runtime.Apply(context.Background(), writeData.Bytes())
-	if err != nil {
-		log.Errorf("Apply set node failed: %#v\nPayload:\n	%#v", err, writeData)
+		log.Errorf("Apply set node failed: %#v\nPayload:\n	%#v", err, payload)
 	}
 
 	return
@@ -337,15 +320,9 @@ func (s *KayakKVServer) SetDatabase(meta wt.ServiceInstance) (err error) {
 		Data:    metaBuf.Bytes(),
 	}
 
-	writeData, err := utils.EncodeMsgPack(payload)
+	_, _, err = s.Runtime.Apply(context.Background(), payload)
 	if err != nil {
-		log.WithError(err).Error("marshal payload failed")
-		return err
-	}
-
-	_, _, err = s.Runtime.Apply(context.Background(), writeData.Bytes())
-	if err != nil {
-		log.Errorf("Apply set database failed: %#v\nPayload:\n	%#v", err, writeData)
+		log.Errorf("Apply set database failed: %#v\nPayload:\n	%#v", err, payload)
 	}
 
 	return
@@ -366,15 +343,9 @@ func (s *KayakKVServer) DeleteDatabase(dbID proto.DatabaseID) (err error) {
 		Data:    metaBuf.Bytes(),
 	}
 
-	writeData, err := utils.EncodeMsgPack(payload)
+	_, _, err = s.Runtime.Apply(context.Background(), payload)
 	if err != nil {
-		log.WithError(err).Error("marshal payload failed")
-		return err
-	}
-
-	_, _, err = s.Runtime.Apply(context.Background(), writeData.Bytes())
-	if err != nil {
-		log.Errorf("Apply set database failed: %#v\nPayload:\n	%#v", err, writeData)
+		log.Errorf("Apply set database failed: %#v\nPayload:\n	%#v", err, payload)
 	}
 
 	return

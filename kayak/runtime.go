@@ -18,7 +18,6 @@ package kayak
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"math"
 	"sync"
@@ -26,7 +25,6 @@ import (
 	"time"
 
 	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
-	kl "github.com/CovenantSQL/CovenantSQL/kayak/wal"
 	"github.com/CovenantSQL/CovenantSQL/proto"
 	"github.com/CovenantSQL/CovenantSQL/rpc"
 	"github.com/CovenantSQL/CovenantSQL/utils/log"
@@ -55,8 +53,8 @@ type Runtime struct {
 	// instance identifies kayak in multi-instance environment
 	// e.g. use database id for SQLChain scenario.
 	instanceID string
-	// logPool defines the pool for kayak logs.
-	logPool kt.Wal
+	// wal defines the wal for kayak.
+	wal kt.Wal
 	// underlying handler
 	sh kt.Handler
 
@@ -141,17 +139,18 @@ func NewRuntime(cfg *kt.RuntimeConfig) (rt *Runtime, err error) {
 	}
 
 	if !exists {
-		err = kt.ErrNotInPeer
+		err = errors.Wrapf(kt.ErrNotInPeer, "node %v not in peers %v", cfg.NodeID, peers)
 		return
 	}
 
+	// calculate fan-out count according to threshold and peers info
 	minPreparedFollowers := int(math.Max(math.Ceil(cfg.PrepareThreshold*float64(len(peers.Servers))), 1) - 1)
 	minCommitFollowers := int(math.Max(math.Ceil(cfg.CommitThreshold*float64(len(peers.Servers))), 1) - 1)
 
 	rt = &Runtime{
 		// handler and logs
-		sh:      cfg.Handler,
-		logPool: cfg.Pool,
+		sh:  cfg.Handler,
+		wal: cfg.Wal,
 
 		// peers
 		peers:                cfg.Peers,
@@ -176,6 +175,7 @@ func NewRuntime(cfg *kt.RuntimeConfig) (rt *Runtime, err error) {
 		// stop coordinator
 		stopCh: make(chan struct{}),
 	}
+
 	return
 }
 
@@ -184,6 +184,9 @@ func (r *Runtime) Start() {
 	if !atomic.CompareAndSwapUint32(&r.started, 0, 1) {
 		return
 	}
+
+	// read from pool to rebuild uncommitted log map
+	// TODO():
 
 	// start commit cycle
 	r.goFunc(r.commitCycle)
@@ -208,7 +211,7 @@ func (r *Runtime) Shutdown() (err error) {
 }
 
 // Apply defines entry for Leader node.
-func (r *Runtime) Apply(ctx context.Context, data []byte) (result interface{}, logIndex uint64, err error) {
+func (r *Runtime) Apply(ctx context.Context, data interface{}) (result interface{}, logIndex uint64, err error) {
 	r.peersLock.RLock()
 	defer r.peersLock.RUnlock()
 
@@ -365,32 +368,24 @@ func (r *Runtime) UpdatePeers(peers *proto.Peers) (err error) {
 	return
 }
 
-func (r *Runtime) leaderLogPrepare(data []byte) (*kt.Log, error) {
+func (r *Runtime) leaderLogPrepare(data interface{}) (*kt.Log, error) {
 	// just write new log
 	return r.newLog(kt.LogPrepare, data)
 }
 
 func (r *Runtime) leaderLogRollback(i uint64) (*kt.Log, error) {
 	// just write new log
-	return r.newLog(kt.LogRollback, r.uint64ToBytes(i))
+	return r.newLog(kt.LogRollback, i)
 }
 
 func (r *Runtime) followerPrepare(l *kt.Log) (err error) {
-	var d interface{}
-	// convert raw data to interface
-	if d, err = r.sh.Convert(l.Data); err != nil {
-		err = errors.Wrap(err, "convert log bytes in prepare")
-		return
-	}
-
-	// verify the log, such as connID/seqNo/timestamp check
-	if err = r.sh.Check(d); err != nil {
+	if err = r.sh.Check(l.Data); err != nil {
 		err = errors.Wrap(err, "follower verify log")
 		return
 	}
 
 	// write log
-	if err = r.logPool.Write(l); err != nil {
+	if err = r.wal.Write(l); err != nil {
 		err = errors.Wrap(err, "write follower prepare log failed")
 		return
 	}
@@ -399,16 +394,13 @@ func (r *Runtime) followerPrepare(l *kt.Log) (err error) {
 }
 
 func (r *Runtime) followerRollback(l *kt.Log) (err error) {
-	if _, err = r.getPrepareLog(l); err == kl.ErrTruncated {
-		// TODO():
-		err = nil
-	} else if err != nil {
+	if _, err = r.getPrepareLog(l); err != nil {
 		err = errors.Wrap(err, "get original request failed")
 		return
 	}
 
-	// write log to pool
-	if err = r.logPool.Write(l); err != nil {
+	// write wal
+	if err = r.wal.Write(l); err != nil {
 		err = errors.Wrap(err, "write follower rollback log failed")
 	}
 
@@ -434,18 +426,16 @@ func (r *Runtime) commitResult(ctx context.Context, commitLog *kt.Log, prepareLo
 	// decode log and send to commit channel to process
 	res = make(chan *commitResult, 1)
 
-	var d interface{}
-	var err error
-	if d, err = r.sh.Convert(prepareLog.Data); err != nil {
+	if prepareLog == nil {
 		res <- &commitResult{
-			err: errors.Wrap(err, "convert logs bytes in commit"),
+			err: errors.Wrap(kt.ErrInvalidLog, "nil prepare log in commit"),
 		}
 		return
 	}
 
 	req := &commitReq{
 		ctx:    ctx,
-		data:   d,
+		data:   prepareLog.Data,
 		index:  prepareLog.Index,
 		result: res,
 		log:    commitLog,
@@ -501,7 +491,7 @@ func (r *Runtime) leaderDoCommit(req *commitReq) (tracker *rpcTracker, result in
 	// create leader log
 	var l *kt.Log
 
-	if l, err = r.newLog(kt.LogCommit, r.uint64ToBytes(req.index)); err != nil {
+	if l, err = r.newLog(kt.LogCommit, req.index); err != nil {
 		// TODO(): record last commit
 		// serve error, leader could not write log
 		return
@@ -527,7 +517,7 @@ func (r *Runtime) followerDoCommit(req *commitReq) (err error) {
 	}
 
 	// write log first
-	if err = r.logPool.Write(req.log); err != nil {
+	if err = r.wal.Write(req.log); err != nil {
 		err = errors.Wrap(err, "write follower commit log failed")
 		return
 	}
@@ -540,16 +530,40 @@ func (r *Runtime) followerDoCommit(req *commitReq) (err error) {
 
 func (r *Runtime) getPrepareLog(l *kt.Log) (pl *kt.Log, err error) {
 	var prepareIndex uint64
-	if prepareIndex, err = r.bytesToUint64(l.Data); err != nil {
+
+	// convert number to uint64
+	switch v := l.Data.(type) {
+	case int:
+		prepareIndex = uint64(v)
+	case uint:
+		prepareIndex = uint64(v)
+	case int8:
+		prepareIndex = uint64(v)
+	case int16:
+		prepareIndex = uint64(v)
+	case int32:
+		prepareIndex = uint64(v)
+	case int64:
+		prepareIndex = uint64(v)
+	case uint8:
+		prepareIndex = uint64(v)
+	case uint16:
+		prepareIndex = uint64(v)
+	case uint32:
+		prepareIndex = uint64(v)
+	case uint64:
+		prepareIndex = uint64(v)
+	default:
+		err = errors.Wrap(kt.ErrInvalidLog, "log does not contains a valid prepare log index")
 		return
 	}
 
-	pl, err = r.logPool.Get(prepareIndex)
+	pl, err = r.wal.Get(prepareIndex)
 
 	return
 }
 
-func (r *Runtime) newLog(logType kt.LogType, data []byte) (l *kt.Log, err error) {
+func (r *Runtime) newLog(logType kt.LogType, data interface{}) (l *kt.Log, err error) {
 	// allocate index
 	i := atomic.AddUint64(&r.nextIndex, 1) - 1
 	l = &kt.Log{
@@ -562,7 +576,7 @@ func (r *Runtime) newLog(logType kt.LogType, data []byte) (l *kt.Log, err error)
 	}
 
 	// error write will be a fatal error, cause to node to fail fast
-	if err = r.logPool.Write(l); err != nil {
+	if err = r.wal.Write(l); err != nil {
 		log.Fatal("WRITE LOG FAILED")
 	}
 
@@ -626,21 +640,7 @@ func (r *Runtime) goFunc(f func()) {
 	}()
 }
 
-/// utils
-func (r *Runtime) uint64ToBytes(i uint64) (res []byte) {
-	res = make([]byte, 8)
-	binary.BigEndian.PutUint64(res, i)
-	return
-}
-
-func (r *Runtime) bytesToUint64(b []byte) (uint64, error) {
-	if len(b) < 8 {
-		return 0, kt.ErrInvalidLog
-	}
-	return binary.BigEndian.Uint64(b), nil
-}
-
 //// future extensions, barrier, noop log placeholder etc.
 func (r *Runtime) followerNoop(l *kt.Log) (err error) {
-	return r.logPool.Write(l)
+	return r.wal.Write(l)
 }

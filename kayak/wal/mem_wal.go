@@ -18,28 +18,22 @@ package wal
 
 import (
 	"io"
-	"sort"
 	"sync"
 	"sync/atomic"
 
 	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
 )
 
-// MemWal defines pool using memory as storage.
+// MemWal defines a toy wal using memory as storage.
 type MemWal struct {
 	sync.RWMutex
 	logs     []*kt.Log
 	revIndex map[uint64]int
-
-	offset       uint64
-	base         uint64
-	nextToCommit uint64
-	pendingLock  sync.Mutex
-	pending      []uint64
-	closed       uint32
+	offset   uint64
+	closed   uint32
 }
 
-// NewMemWal returns new memory pool instance.
+// NewMemWal returns new memory wal instance.
 func NewMemWal() (p *MemWal) {
 	p = &MemWal{
 		revIndex: make(map[uint64]int),
@@ -51,7 +45,7 @@ func NewMemWal() (p *MemWal) {
 // Write implements Wal.Write.
 func (p *MemWal) Write(l *kt.Log) (err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
-		err = ErrPoolClosed
+		err = ErrWalClosed
 		return
 	}
 
@@ -60,45 +54,19 @@ func (p *MemWal) Write(l *kt.Log) (err error) {
 		return
 	}
 
-	if l.Index < atomic.LoadUint64(&p.nextToCommit) {
+	p.Lock()
+	defer p.Unlock()
+
+	if _, exists := p.revIndex[l.Index]; exists {
 		err = ErrAlreadyExists
 		return
 	}
 
-	p.Lock()
 	offset := atomic.AddUint64(&p.offset, 1) - 1
 	p.logs = append(p.logs, nil)
 	copy(p.logs[offset+1:], p.logs[offset:])
 	p.logs[offset] = l
 	p.revIndex[l.Index] = int(offset)
-	p.Unlock()
-
-	// advance nextToCommit
-	if atomic.CompareAndSwapUint64(&p.nextToCommit, l.Index, l.Index+1) {
-		// process pending
-		p.pendingLock.Lock()
-		defer p.pendingLock.Unlock()
-
-		for len(p.pending) > 0 {
-			if !atomic.CompareAndSwapUint64(&p.nextToCommit, p.pending[0], p.pending[0]+1) {
-				break
-			}
-			p.pending = p.pending[1:]
-		}
-	} else {
-		p.pendingLock.Lock()
-		defer p.pendingLock.Unlock()
-
-		i := sort.Search(len(p.pending), func(i int) bool {
-			return p.pending[i] >= l.Index
-		})
-
-		if len(p.pending) == i || p.pending[i] != l.Index {
-			p.pending = append(p.pending, 0)
-			copy(p.pending[i+1:], p.pending[i:])
-			p.pending[i] = l.Index
-		}
-	}
 
 	return
 }
@@ -106,14 +74,19 @@ func (p *MemWal) Write(l *kt.Log) (err error) {
 // Read implements Wal.Read.
 func (p *MemWal) Read() (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
-		err = ErrPoolClosed
+		err = ErrWalClosed
 		return
 	}
 
 	p.RLock()
 	defer p.RUnlock()
 
-	index := atomic.AddUint64(&p.offset, 1)
+	if atomic.LoadUint64(&p.offset) > uint64(len(p.logs)) {
+		err = io.EOF
+		return
+	}
+
+	index := atomic.AddUint64(&p.offset, 1) - 1
 	if index >= uint64(len(p.logs)) {
 		// error
 		err = io.EOF
@@ -125,58 +98,10 @@ func (p *MemWal) Read() (l *kt.Log, err error) {
 	return
 }
 
-// Seek implements Wal.Seek.
-func (p *MemWal) Seek(offset uint64) (err error) {
-	if atomic.LoadUint32(&p.closed) == 1 {
-		err = ErrPoolClosed
-		return
-	}
-
-	atomic.StoreUint64(&p.offset, offset)
-	return
-}
-
-// Truncate implements Wal.Truncate.
-func (p *MemWal) Truncate() (err error) {
-	if atomic.LoadUint32(&p.closed) == 1 {
-		err = ErrPoolClosed
-		return
-	}
-
-	p.Lock()
-	defer p.Unlock()
-
-	newBase := atomic.LoadUint64(&p.nextToCommit)
-
-	removed := 0
-	for i := range p.logs {
-		j := i - removed
-		if p.logs[j].Index < newBase {
-			delete(p.revIndex, p.logs[j].Index)
-			p.logs = p.logs[:j+copy(p.logs[j:], p.logs[j+1:])]
-			removed++
-		}
-	}
-
-	for _, v := range p.logs {
-		p.revIndex[v.Index] -= removed
-	}
-
-	atomic.StoreUint64(&p.base, newBase)
-	atomic.StoreUint64(&p.offset, uint64(len(p.logs)))
-
-	return
-}
-
 // Get implements Wal.Get.
 func (p *MemWal) Get(index uint64) (l *kt.Log, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
-		err = ErrPoolClosed
-		return
-	}
-
-	if index < atomic.LoadUint64(&p.base) {
-		err = ErrTruncated
+		err = ErrWalClosed
 		return
 	}
 

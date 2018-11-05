@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
 	"github.com/CovenantSQL/CovenantSQL/proto"
 	"github.com/CovenantSQL/CovenantSQL/route"
 	"github.com/CovenantSQL/CovenantSQL/rpc"
@@ -296,18 +297,18 @@ func (dbms *DBMS) GetRequest(dbID proto.DatabaseID, offset uint64) (query *wt.Re
 		return
 	}
 
-	var reqBytes []byte
-	if reqBytes, err = db.getLog(offset); err != nil {
+	var req interface{}
+	if req, err = db.getLog(offset); err != nil {
+		err = errors.Wrap(err, "get log failed")
 		return
 	}
 
 	// decode requests
-	var q wt.Request
-	if err = utils.DecodeMsgPack(reqBytes, &q); err != nil {
+	var ok bool
+	if query, ok = req.(*wt.Request); !ok {
+		err = errors.Wrap(kt.ErrInvalidLog, "convert log to request failed")
 		return
 	}
-
-	query = &q
 
 	return
 }
