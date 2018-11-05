@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CovenantSQL/CovenantSQL/crypto/asymmetric"
 	"github.com/CovenantSQL/CovenantSQL/kayak"
 	kt "github.com/CovenantSQL/CovenantSQL/kayak/types"
 	kl "github.com/CovenantSQL/CovenantSQL/kayak/wal"
@@ -222,6 +223,11 @@ func BenchmarkNewRuntime(b *testing.B) {
 				},
 			},
 		}
+
+		privKey, _, err := asymmetric.GenSecp256k1KeyPair()
+		So(err, ShouldBeNil)
+		err = peers.Sign(privKey)
+		So(err, ShouldBeNil)
 
 		wal1 := kl.NewMemWal()
 		cfg1 := &kt.RuntimeConfig{
